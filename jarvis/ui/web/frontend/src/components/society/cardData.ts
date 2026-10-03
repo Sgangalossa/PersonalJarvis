@@ -14,7 +14,7 @@ export { describeTrigger } from "@/lib/triggerDescription";
  * card treats them as enrichment and never blocks on them.
  */
 import { useCallback, useEffect } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 const routineListeners = new Set<(agentId: string) => void>();
 
@@ -40,6 +40,12 @@ export interface LearnedSkill {
   name: string;
   description: string;
   whenToUse: string;
+}
+
+/** One typed in-process event that can back an on_event routine trigger. */
+export interface TaskEventCatalogEntry {
+  name: string;
+  fields: string[];
 }
 
 /** A scheduled task tagged for this agent, as the Automations store holds it. */
@@ -112,6 +118,21 @@ async function getJson<T>(url: string): Promise<T | null> {
   }
 }
 
+/** The backend authoritative event names for on_event triggers. */
+export async function fetchTaskEventCatalog(): Promise<TaskEventCatalogEntry[]> {
+  const response = await fetch("/api/tasks/events");
+  if (!response.ok) throw new Error("HTTP " + response.status);
+  const body = await response.json() as {
+    events?: { name?: unknown; fields?: unknown }[];
+  };
+  return (body.events ?? [])
+    .map((row) => ({
+      name: String(row.name ?? ""),
+      fields: Array.isArray(row.fields) ? row.fields.map((field) => String(field)) : [],
+    }))
+    .filter((row) => row.name.length > 0);
+}
+
 /** The line the routines list shows: live trigger, else the sample's own phrase. */
 export function routineScheduleLine(routine: Pick<LiveRoutine, "trigger" | "schedule">, t: (key: string) => string): string {
   return describeTrigger(routine.trigger, t) || routine.schedule;
@@ -174,6 +195,50 @@ export function useAgentSkills(agentId: string | null) {
         description: String(s.description ?? ""),
         whenToUse: String(s.when_to_use ?? ""),
       }));
+    },
+  });
+}
+
+/**
+ * Put one private learned skill into the global Skills catalog as a draft.
+ *
+ * A 409 means the exact promoted target already exists. For the model-card
+ * review flow that is success: the next step is still to open Skills and let
+ * the person inspect/activate the draft there.
+ */
+export async function promoteAgentSkillForReview(agentId: string, slug: string): Promise<void> {
+  const response = await fetch(
+    `/api/society/agents/${encodeURIComponent(agentId)}/skills/${encodeURIComponent(slug)}/promote`,
+    { method: "POST" },
+  );
+  if (response.status === 409) return;
+  if (response.ok) {
+    const body = (await response.json().catch(() => null)) as { state?: unknown } | null;
+    if (body?.state !== "draft") {
+      throw new Error("learned skill promotion must remain draft");
+    }
+    return;
+  }
+  const body = (await response.json().catch(() => null)) as { detail?: unknown } | null;
+  const detail = body?.detail;
+  const message =
+    typeof detail === "string"
+      ? detail
+      : detail && typeof detail === "object" && "reason" in detail
+        ? String((detail as { reason?: unknown }).reason ?? "")
+        : "";
+  throw new Error(message || `HTTP ${response.status}`);
+}
+
+export function usePromoteAgentSkill(agentId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (slug: string) => promoteAgentSkillForReview(agentId, slug),
+    onSuccess: async () => {
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ["society", "agent-skills", agentId] }),
+        client.invalidateQueries({ queryKey: ["skills"] }),
+      ]);
     },
   });
 }

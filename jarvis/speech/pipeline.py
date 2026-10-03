@@ -79,6 +79,7 @@ from jarvis.core.events import (
     TranscriptionUpdate,
     UtteranceCaptured,
     VoiceBootStatus,
+    VoiceInputHeld,
     VoiceMuteChanged,
     VoiceMuteToggleRequested,
     VoiceSessionEnded,
@@ -2388,6 +2389,10 @@ class SpeechPipeline:
         # and the moment ``_dictation_task`` exists (or the handover is refused),
         # and never both at once. See ``_begin_dictation_handover``.
         self._dictation_handover_task: asyncio.Task[None] | None = None
+        # A dictation started beside a live call, and whether that call's input
+        # is held for it. See ``_live_call_owns_microphone``.
+        self._dictation_beside_call = False
+        self._voice_input_held = False
         # 0.0 is a real value here — "no ceiling" — so it must NOT be coerced
         # to a default the way an absent or malformed setting is. The old
         # ``or 300.0`` did exactly that and made the off switch unreachable
@@ -3015,6 +3020,10 @@ class SpeechPipeline:
         self._explicit_hangup_lock_s: float = 0.4
         self._explicit_hard_hangup: bool = False
         self._last_wake_keyword: str = ""
+        self._pending_wake_latency_anchor_ns: int | None = None
+        self._session_wake_latency_anchor_ns: int | None = None
+        self._turn_wake_latency_anchor_ns: int | None = None
+        self._wake_to_intent_e2e_ms: float | None = None
         # 2026-05-26: timestamp of the last priority="interrupt"
         # announcement, used by ``_on_announcement`` to gate preamble-class
         # announcements that would otherwise produce cross-surface voice
@@ -4588,6 +4597,9 @@ class SpeechPipeline:
 
     async def _emit_wake(self, keyword: str, confidence: float = 0.0) -> None:
         self._last_wake_keyword = keyword
+        # Monotonic anchor survives detector → session handoff; the first
+        # finalized user turn consumes it to measure wake-to-intent end-to-end.
+        self._pending_wake_latency_anchor_ns = time.perf_counter_ns()
         if self._bus is not None:
             try:
                 await self._bus.publish(
@@ -5028,6 +5040,7 @@ class SpeechPipeline:
         retain the existing player-stop behavior. Classic playback uses
         synthesize() and play_chunks(), the same path as ordinary answers.
         """
+        announcement_tracker = getattr(self, "_latency_tracker", None)
         event_kind = getattr(event, "kind", None)
         is_readback = event_kind in _READBACK_KINDS
         is_agent_reply = self._is_agent_reply(event)
@@ -5496,6 +5509,17 @@ class SpeechPipeline:
                 not is_agent_reply or not self._agent_reply_needs_session()
             )
             if agent_reply_completed:
+                # Attribute the receipt to the tracker captured before any await.
+                # A delayed announcement must never mark a newer voice turn.
+                if (
+                    is_instant_ack
+                    and announcement_tracker is not None
+                    and announcement_tracker is getattr(self, "_latency_tracker", None)
+                ):
+                    try:
+                        announcement_tracker.mark(LatencyPhase.ACK_PLAYBACK_CONFIRMED)
+                    except Exception:  # noqa: BLE001 -- telemetry is best-effort
+                        log.debug("Ack playback latency mark failed", exc_info=True)
                 self._emit_spoken(
                     scrubbed.cleaned,
                     ann_lang,
@@ -8800,6 +8824,7 @@ class SpeechPipeline:
             ) or bool(getattr(self, "_ptt_mode", False))
             self._explicit_call_pending = False
             if not self._activation_allowed():
+                self._pending_wake_latency_anchor_ns = None
                 # Resolved, never guessed: this backstop closes for a mute and
                 # for a running dictation too, and a log line that names the
                 # window instead is exactly what misled an earlier diagnosis.
@@ -8814,6 +8839,7 @@ class SpeechPipeline:
                 await self._abort_pending_wake_handoff()
                 continue
             if now < self._wake_lock_until and not explicit_call:
+                self._pending_wake_latency_anchor_ns = None
                 # The speaker-echo lock gates only WAKE-WORD calls: the tail of
                 # Jarvis' own TTS can re-trigger the wake word, but it cannot
                 # press a key. Dropping explicit presses here made a quick
@@ -8873,6 +8899,15 @@ class SpeechPipeline:
                 else (self._last_wake_keyword or "hotkey")
             )
             self._last_wake_keyword = ""
+            pending_wake_anchor = getattr(
+                self, "_pending_wake_latency_anchor_ns", None
+            )
+            self._pending_wake_latency_anchor_ns = None
+            self._session_wake_latency_anchor_ns = (
+                pending_wake_anchor
+                if not explicit_call and wake_keyword not in {"hotkey", "engine_switch"}
+                else None
+            )
             hangup_reason = HANGUP_ERROR
             try:
                 # Reuse the already-open wake microphone when available. The
@@ -10919,9 +10954,68 @@ class SpeechPipeline:
                 "The voice pipeline is not running, so dictation cannot start.",
             )
             return False
+        if self._live_call_owns_microphone():
+            # A live call keeps running: its input is held, not hung up.
+            return self._commit_dictation(
+                loop, target=target, source=source, beside_call=True
+            )
         if self._voice_session_holds_microphone():
             return self._begin_dictation_handover(loop, target=target, source=source)
         return self._commit_dictation(loop, target=target, source=source)
+
+    def _live_call_owns_microphone(self) -> bool:
+        """True while a live realtime call captures the microphone in the WebView.
+
+        Such a call owns its own capture (getUserMedia, with the browser's echo
+        cancellation), so a dictation does not have to take the device away
+        from it. Instead the dictation records through its own capture and the
+        call's input is HELD until the text is delivered (``VoiceInputHeld``):
+        the conversation stays open and the dictated words never become a turn.
+        Push-to-talk is excluded — its raw recording is the pipeline's own
+        stream, and that lane keeps the ordinary handover.
+        """
+        if getattr(self, "_ptt_mode", False):
+            return False
+        try:
+            from jarvis.live.runtime import owns_microphone
+        except Exception:  # noqa: BLE001 — no live stack means no live call
+            log.debug("live call registry unavailable", exc_info=True)
+            return False
+        return owns_microphone()
+
+    @property
+    def is_voice_input_held(self) -> bool:
+        """Whether a dictation currently holds a live call's input back.
+
+        Read by a call that starts DURING such a dictation, so it adopts the
+        hold instead of hearing the dictated words.
+        """
+        return bool(getattr(self, "_voice_input_held", False))
+
+    def _set_voice_input_held(self, held: bool) -> None:
+        """Hold or release a live call's input and tell the call. Never raises."""
+        if bool(getattr(self, "_voice_input_held", False)) == held:
+            return
+        self._voice_input_held = held
+        log.info(
+            "Live call input %s for the dictation.",
+            "held" if held else "released",
+        )
+        self._publish_event_soon(VoiceInputHeld(held=held, reason="dictation"))
+
+    def _on_beside_call_dictation_done(self, _task: asyncio.Task[None]) -> None:
+        """Give the call its voice back once the dictation has fully ended.
+
+        A done-callback rather than a ``finally``: it runs for every end of the
+        task, including one cancelled before its first step, so the call can
+        never be left deaf. The task ends only after the text was delivered,
+        which is the moment the user may talk to the call again.
+        """
+        try:
+            self._dictation_beside_call = False
+            self._set_voice_input_held(False)
+        except Exception:  # noqa: BLE001 — a release must never become a crash
+            log.warning("Releasing the live call input failed", exc_info=True)
 
     def _voice_session_holds_microphone(self) -> bool:
         """True while the VOICE lane owns the one input device.
@@ -11082,26 +11176,42 @@ class SpeechPipeline:
             log.debug("Dictation handover callback failed", exc_info=True)
 
     def _commit_dictation(
-        self, loop: asyncio.AbstractEventLoop, *, target: str, source: str = "api"
+        self,
+        loop: asyncio.AbstractEventLoop,
+        *,
+        target: str,
+        source: str = "api",
+        beside_call: bool = False,
     ) -> bool:
         """Arm the wake block, announce the turn and spawn the recording task.
 
         The commit point shared by the direct start and the handover, so both
         arrive in the dictation lane through exactly one door. Always returns
         ``True``; every reason not to be here is checked by ``start_dictation``.
+
+        ``beside_call`` means a live call keeps running next to this dictation:
+        its input is held until the task ends, and the call's hangup event is
+        left alone — it belongs to the call, not to this recording.
         """
         self._dictation_started_by = str(source or "api")
         self._dictation_discard_requested = False
+        self._dictation_beside_call = beside_call
         # A fresh dictation session must NOT inherit a stale hangup. ``_hangup_event``
         # is set by every "auflegen" and is otherwise only cleared when the next
         # VOICE session is accepted (``_run_session``). The dictation lane shares
         # that event in its ``asyncio.wait`` gate, so a leftover hangup from an
         # earlier voice call would finalize this session on its first tick — the
         # mic appears to "stop the instant you click it". Clear it here, mirroring
-        # the voice-path ``self._hangup_event.clear()`` at session accept.
+        # the voice-path ``self._hangup_event.clear()`` at session accept. Beside
+        # a live call the event is the CALL's: clearing it could swallow a
+        # hangup the user just asked for, and the lane does not wait on it.
         hangup = getattr(self, "_hangup_event", None)
-        if hangup is not None:
+        if hangup is not None and not beside_call:
             hangup.clear()
+        if beside_call:
+            # Held BEFORE the recording task exists, so the call stops hearing
+            # the user as early as possible.
+            self._set_voice_input_held(True)
         # Stored RAW ("auto" / "insert" / "chat"). ``auto`` is resolved when the
         # recording ENDS, not here: the window that matters is the one in front
         # when the text is delivered. Clicking "Start dictating" in the app and
@@ -11145,10 +11255,13 @@ class SpeechPipeline:
         self._dictation_task = loop.create_task(
             self._dictation_session(), name="dictation"
         )
+        if beside_call:
+            self._dictation_task.add_done_callback(self._on_beside_call_dictation_done)
         log.info(
-            "🎙️ dictation started (transcribe-only, target=%s, via=%s).",
+            "🎙️ dictation started (transcribe-only, target=%s, via=%s%s).",
             self._dictation_target,
             self._dictation_started_by,
+            ", beside a live call" if beside_call else "",
         )
         return True
 
@@ -12655,9 +12768,10 @@ class SpeechPipeline:
               the text and sits far above the token floor below — and it is
               the one the polish pass can trust, because the re-read is short
               and pause-free.
-            * **Tokens against voiced seconds**, as before, for providers
-              without timestamps and for a window that came back short without
-              a clock to say where it stopped.
+            * **Tokens against voiced seconds** for providers without
+              timestamps. When timestamps confirm the transcript reaches the
+              end of the speech, that clock takes precedence over a generic
+              speech-rate floor; short, deliberate dictation is still complete.
 
             A recognizer handed audio with a sustained mid-recording pause can
             stop at the pause and silently drop everything after it — the
@@ -12736,6 +12850,14 @@ class SpeechPipeline:
                             truncation_repairs += 1
                             tail_repairs += 1
                             return merged
+            if (
+                transcript_end_s is not None
+                and voiced_end_s - transcript_end_s < _DICTATION_TAIL_DROP_MIN_S
+            ):
+                # The provider supplied a usable clock and the speech tail is
+                # present. Re-reading a low-token but complete window can turn
+                # deliberate pauses into fragments or hallucinated extra text.
+                return text
             if tokens >= voiced_s * _DICTATION_TRUNCATION_TOKENS_PER_VOICED_S:
                 return text
             split_at_pauses = len(runs) > 1
@@ -13247,7 +13369,14 @@ class SpeechPipeline:
                     else None
                 )
                 stop_task = asyncio.create_task(self._dictation_stop_event.wait())
-                hangup_task = asyncio.create_task(self._hangup_event.wait())
+                # Beside a live call the hangup event is the CALL's: hanging up
+                # the conversation must not throw away what is being dictated.
+                hangup_event = (
+                    asyncio.Event()
+                    if getattr(self, "_dictation_beside_call", False)
+                    else self._hangup_event
+                )
+                hangup_task = asyncio.create_task(hangup_event.wait())
                 # Only a recording the HOLD key started is owed a release edge;
                 # the watchdog ends it when the key is physically up and that
                 # edge never came (BUG-191). It sets the stop event, so it is
@@ -13270,7 +13399,7 @@ class SpeechPipeline:
                         timeout=self._dictation_max_s or None,
                         return_when=asyncio.FIRST_COMPLETED,
                     )
-                    hung_up = hangup_task in done or self._hangup_event.is_set()
+                    hung_up = hangup_task in done or hangup_event.is_set()
                     if getattr(self, "_dictation_discard_requested", False):
                         # The bar's close-X: end it like a hangup — nothing
                         # transcribed, nothing delivered.
@@ -14880,6 +15009,8 @@ class SpeechPipeline:
             # returned early) so it cannot leak into the next turn.
             self._continuation_pending_drop = None
             self._emit_latency_turn_complete()
+            self._turn_wake_latency_anchor_ns = None
+            self._wake_to_intent_e2e_ms = None
             # Close this turn's speech buckets: one priced event per stage and
             # provider, however many sentences the reply was split into.
             recorder = getattr(self, "_speech_spend", None)
@@ -14911,6 +15042,9 @@ class SpeechPipeline:
                 anchor_ns=tracker.anchor_ns,
                 stages_ms=stages,
                 errors=tracker.errors_snapshot(),
+                wake_to_intent_e2e_ms=getattr(
+                    self, "_wake_to_intent_e2e_ms", None
+                ),
             )
             asyncio.create_task(bus.publish(event))  # noqa: RUF006 — fire-and-forget
         except Exception:  # noqa: BLE001 — telemetry must never break the turn
@@ -15058,6 +15192,11 @@ class SpeechPipeline:
         # it to refuse a "took too long" phrase on a turn that genuinely ran
         # under the floor (the sub-second spurious-apology bug, 2026-06-14).
         self._turn_start_monotonic = time.monotonic()
+        wake_anchor_ns = getattr(self, "_session_wake_latency_anchor_ns", None)
+        # Keep the session anchor until a real intent is dispatched. A user
+        # may say only the wake phrase first, then issue the command next turn.
+        self._turn_wake_latency_anchor_ns = wake_anchor_ns
+        self._wake_to_intent_e2e_ms = None
         self._latency_tracker = LatencyTracker(
             self._bus,
             uuid4(),
@@ -15354,6 +15493,13 @@ class SpeechPipeline:
         self._arm_continuation(text, continued=_continued_dispatch)
         log.info("→ Brain …")
         if self._latency_tracker is not None:
+            wake_anchor_ns = getattr(self, "_turn_wake_latency_anchor_ns", None)
+            if wake_anchor_ns is not None:
+                self._wake_to_intent_e2e_ms = max(
+                    0.0, (time.perf_counter_ns() - wake_anchor_ns) / 1_000_000
+                )
+                self._turn_wake_latency_anchor_ns = None
+                self._session_wake_latency_anchor_ns = None
             self._latency_tracker.mark(LatencyPhase.INTENT_DECISION)
 
         # Pre-Thinking-Ack Flash-Brain: spawn parallel acknowledgment task

@@ -1,0 +1,27 @@
+{
+  "society": {
+    "ledger": {
+      "title": "Registro Society",
+      "subtitle": "Cronologia persistente dal registro eventi della Society.",
+      "empty": "Nessun evento Society per ora.",
+      "error": "Impossibile caricare il registro Society.",
+      "time": "Ora",
+      "type": "Tipo",
+      "from": "Da",
+      "to": "A",
+      "detail": "Dettaglio",
+      "cost": "Costo",
+      "total_cost": "Costo modelli registrato",
+      "board": "Bacheca"
+    },
+    "office": {
+      "reduced_motion": "Riduci movimento è attivo. Il piano 3D animato è in pausa; il Registro mantiene disponibile la stessa attività degli agenti senza movimento.",
+      "ledger": "Apri registro"
+    },
+    "card": {
+      "learned_review_hint": "Le skill apprese private restano istruzioni consultive. Inviane una a Skills come bozza per revisionarla prima dell'attivazione globale.",
+      "learned_review": "Rivedi in Skills",
+      "learned_reviewing": "Preparazione bozza…"
+    }
+  }
+}

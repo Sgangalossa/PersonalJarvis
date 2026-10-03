@@ -3710,7 +3710,9 @@
     "prompt_not_submitted": "the prompt is in its input box, not sent",
     "prompt_unconfirmed": "the prompt was typed in, but the pane never showed it arriving — check that pane",
     "dictation_nowhere": "No text field had focus, so the dictation was not inserted. It is in the dictation history.",
-    "realtime_provider_issue": "The realtime provider reported a problem."
+    "realtime_provider_issue": "The realtime provider reported a problem.",
+    "society_approval_attention_one": "One agent approval needs your attention.",
+    "society_approval_attention_many": "{0} agent approvals need your attention."
   },
   "chat_thread": {
     "message_to": "Message to",
@@ -4870,6 +4872,7 @@
     "area": {
       "all": "Overall",
       "jarvis": "{name}",
+      "society": "Society",
       "agentic_ide": "Agentic IDE",
       "jarvis_voice": "{name} Voice"
     },
@@ -5008,6 +5011,7 @@
       "background": "Behind the scenes",
       "voice": "Voice",
       "agent_chat": "Agent chat",
+      "society": "Society",
       "mission": "Mission",
       "agentic_ide": "Agentic IDE",
       "jarvis_voice": "{name} Voice"
@@ -5342,6 +5346,9 @@
       "chat": "Chat",
       "hands": "Hands",
       "learned": "Learned",
+      "learned_review_hint": "Private learned skills stay advisory. Send one to Skills as a draft to review it before global activation.",
+      "learned_review": "Review in Skills",
+      "learned_reviewing": "Preparing draft…",
       "limits": "Limits",
       "budget_hint": "The scheduler refuses a job once the day's spend reaches this.",
       "budget_cap": "Daily budget cap",

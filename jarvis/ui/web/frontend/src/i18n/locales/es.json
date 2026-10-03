@@ -3710,7 +3710,9 @@
     "prompt_not_submitted": "el prompt está en su campo de entrada, no se envió",
     "prompt_unconfirmed": "el prompt se escribió, pero el panel no mostró que llegara: revisa ese panel",
     "dictation_nowhere": "Ningún campo de texto tenía el foco, así que el dictado no se insertó. Está en el historial de dictados.",
-    "realtime_provider_issue": "El proveedor Realtime informó de un problema."
+    "realtime_provider_issue": "El proveedor Realtime informó de un problema.",
+    "society_approval_attention_one": "Una aprobación de agente necesita tu atención.",
+    "society_approval_attention_many": "{0} aprobaciones de agente necesitan tu atención."
   },
   "chat_thread": {
     "message_to": "Mensaje a",
@@ -4870,6 +4872,7 @@
     "area": {
       "all": "Total",
       "jarvis": "{name}",
+      "society": "Sociedad",
       "agentic_ide": "Agentic IDE",
       "jarvis_voice": "{name} Voice"
     },
@@ -5008,6 +5011,7 @@
       "background": "En segundo plano",
       "voice": "Voz",
       "agent_chat": "Chat de agentes",
+      "society": "Sociedad",
       "mission": "Misión",
       "agentic_ide": "Agentic IDE",
       "jarvis_voice": "{name} Voice"
@@ -5342,6 +5346,9 @@
       "chat": "Chat",
       "hands": "Manos",
       "learned": "Aprendido",
+      "learned_review_hint": "Las habilidades privadas aprendidas siguen siendo orientativas. Envía una a Skills como borrador para revisarla antes de activarla globalmente.",
+      "learned_review": "Revisar en Skills",
+      "learned_reviewing": "Preparando borrador…",
       "limits": "Límites",
       "budget_hint": "El planificador deja de dar trabajos cuando el gasto del día llega aquí.",
       "budget_cap": "Límite de gasto diario",
