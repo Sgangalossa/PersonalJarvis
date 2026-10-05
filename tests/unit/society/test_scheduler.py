@@ -690,6 +690,21 @@ async def test_trace_message_cap(tmp_path: Path):
     await store.close()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("run_id", ["", " ", "\t"])
+async def test_unusable_dispatch_run_id_becomes_internal_veto(world, run_id):
+    store, _, scheduler, _, _ = world
+
+    async def broken_dispatch(target, env):
+        return run_id
+
+    scheduler._dispatch = broken_dispatch
+    await store.append_and_publish(_assign("jarvis", "scout", trace="bad-run"))
+
+    assert scheduler.running == {}
+    assert await _vetoes(store, "bad-run") == [str(FailureReason.INTERNAL_ERROR)]
+
+
 async def test_dispatch_failure_becomes_typed_veto(tmp_path: Path):
     store = SocietyStore(tmp_path / "d.db")
     await store.open()
