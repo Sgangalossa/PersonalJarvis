@@ -87,3 +87,5 @@ Native macOS qualification remains separate and requires physical Accessibility/
 - `db14ae4` makes resume use a paused-state CAS, preventing a concurrent cancellation from resurrecting a paused task as scheduled.
 
 - `48317d2` adds a scheduler regression proving `pause()` cannot win a race against an already-running task.
+
+- `d4ee0ff` makes paused `run_now` restoration CAS-safe and only re-registers the task when its persisted spec still exists.
