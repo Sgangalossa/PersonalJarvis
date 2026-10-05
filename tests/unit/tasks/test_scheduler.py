@@ -187,18 +187,18 @@ async def test_hook_delivery_claim_allows_only_one_concurrent_runner(
     )
     tid = await scheduler.schedule(spec)
     assert await scheduler.receive_hook(tid, {"value": 1}, "delivery-1") == "queued"
+    assert await scheduler.receive_hook(tid, {"value": 2}, "delivery-2") == "queued"
     rows = await store.hooks.pending()
-    assert len(rows) == 1
+    assert {row["delivery_id"] for row in rows} == {"delivery-1", "delivery-2"}
 
-    await asyncio.gather(scheduler._run_hook(rows[0]), scheduler._run_hook(rows[0]))
+    await asyncio.gather(*(scheduler._run_hook(row) for row in rows))
 
     assert runner.dispatched == [tid]
-    row = await store.hooks._one(
-        "SELECT status FROM task_hook_deliveries WHERE task_id=? AND delivery_id=?",
-        (tid, "delivery-1"),
+    statuses = await store.hooks._all(
+        "SELECT delivery_id, status FROM task_hook_deliveries WHERE task_id=? ORDER BY delivery_id",
+        (tid,),
     )
-    assert row is not None
-    assert row[0] == "done"
+    assert statuses == [("delivery-1", "done"), ("delivery-2", "pending")]
 
 
 async def test_on_event_filter_expr_blocks_non_match(
