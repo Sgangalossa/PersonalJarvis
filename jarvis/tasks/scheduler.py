@@ -491,8 +491,11 @@ class TaskScheduler:
             raise TaskStateConflict("task is running — wait for it to finish")
         if state in TERMINAL_STATES:
             raise TaskStateConflict(f"task is already final (state={state})")
+        if not await self._store.update_state(
+            task_id, "paused", expected_state=state
+        ):
+            raise TaskStateConflict("task changed before pause could be applied")
         self._remove_from_memory(task_id)
-        await self._store.update_state(task_id, "paused")
         await self._store.append_step(task_id, "log", {"event": "paused"})
         self._wakeup.set()
 
