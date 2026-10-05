@@ -75,3 +75,5 @@ The historical Frontier integration note is resolved in current code: `BrainMana
 Native macOS qualification remains separate and requires physical Accessibility/input permission; remote CI must not be described as MacAgentBench evidence.
 
 - `0837962` persists MissionCompleted subject deduplication in task steps and adds a restart regression, so a scheduler restart cannot replay the same mission-triggered automation.
+
+- `3cdeb93` atomically claims scheduled task runs in `TaskStore` and guards `TaskRunner` against concurrent duplicate execution, with a focused single-flight regression.
