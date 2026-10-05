@@ -83,3 +83,5 @@ Native macOS qualification remains separate and requires physical Accessibility/
 - `3cf2fba` preserves `run_now` on paused recurring tasks after the single-flight runner claim was introduced, restoring the paused state only after a successful CAS.
 
 - `642b54c` makes pause use the same state CAS as cancellation, so a task that starts running between the read and the pause request is not silently paused or removed from the scheduler index.
+
+- `db14ae4` makes resume use a paused-state CAS, preventing a concurrent cancellation from resurrecting a paused task as scheduled.
