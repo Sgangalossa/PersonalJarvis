@@ -85,3 +85,5 @@ Native macOS qualification remains separate and requires physical Accessibility/
 - `642b54c` makes pause use the same state CAS as cancellation, so a task that starts running between the read and the pause request is not silently paused or removed from the scheduler index.
 
 - `db14ae4` makes resume use a paused-state CAS, preventing a concurrent cancellation from resurrecting a paused task as scheduled.
+
+- `48317d2` adds a scheduler regression proving `pause()` cannot win a race against an already-running task.
