@@ -808,10 +808,12 @@ async def test_room_dispatch_failure_releases_subscription_before_watcher(
         claimed = await rt.rooms.claim_turn(room.room_id, "claim-test")
         original_send = svc.send
 
-        async def interrupted_send(session_id, text, *, incoming=None):
+        async def interrupted_send(session_id, text, *, incoming=None, read_only=False):
             if failure == "cancelled_send":
                 raise asyncio.CancelledError
-            turn_id = await original_send(session_id, text, incoming=incoming)
+            turn_id = await original_send(
+                session_id, text, incoming=incoming, read_only=read_only
+            )
             await rt.rooms.settle(room.room_id, reason="user")
             return turn_id
 
