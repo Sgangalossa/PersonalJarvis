@@ -125,6 +125,7 @@ class ScheduleTaskTool:
                 due_ns = parse_iso_timestamp_to_ns(trigger.iso_timestamp)
                 if due_ns <= 0:
                     raise ValueError("timestamp is before the Unix epoch")
+            # User-input validation errors are returned to the caller; no stack log is needed.
             except (TypeError, ValueError) as exc:
                 return ToolResult(False, None, f"invalid_input: invalid ISO timestamp: {exc}")
 
