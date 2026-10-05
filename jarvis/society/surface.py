@@ -47,7 +47,7 @@ from .communication import COMMUNICATION_GUIDANCE
 from .conversation_tool import ConversationRecallTool, RoutineInvokeTool, RoutineListTool
 from .learning import RunLearnedSkillTool
 from .memory import resolve_society_vault
-from .roster import AgentRecord, canonical_session_id
+from .roster import LEAD_AGENT_ID, AgentRecord, canonical_session_id
 from .routine_runner import is_routine_session
 from .runtime import current_runtime
 
@@ -489,11 +489,15 @@ class _GatedTool:
             getter = getattr(store, "get_session", None)
             if callable(getter):
                 session = getter(self._session_id)
-                if (
-                    session is None
-                    or str(getattr(session, "surface", "")) != SURFACE
-                    or agent_id_of(self._session_id) != live.agent_id
-                ):
+                surface = str(getattr(session, "surface", ""))
+                session_agent = agent_id_of(self._session_id)
+                valid_society = surface == SURFACE and session_agent == live.agent_id
+                valid_lead = (
+                    surface == "jarvis"
+                    and session_agent is None
+                    and live.agent_id == LEAD_AGENT_ID
+                )
+                if not (valid_society or valid_lead):
                     return ToolResult(
                         False,
                         {"reason": "blocked_by_policy"},
@@ -530,7 +534,10 @@ class _GatedTool:
                     self._inner.risk_tier = (
                         "safe" if restricted else str(self._base_inner_risk_tier or "monitor")
                     )
-                if hasattr(self._inner, "is_action_tool") and self._base_inner_is_action_tool is not None:
+                if (
+                    hasattr(self._inner, "is_action_tool")
+                    and self._base_inner_is_action_tool is not None
+                ):
                     self._inner.is_action_tool = (
                         False if restricted else bool(self._base_inner_is_action_tool)
                     )

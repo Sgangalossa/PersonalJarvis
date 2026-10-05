@@ -1,5 +1,6 @@
 """Desktop bootstrap and subscription agents must discover the owned browser."""
 
+import asyncio
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -16,6 +17,7 @@ async def test_desktop_bootstrap_publishes_the_mcp_endpoint(monkeypatch):
     from jarvis.ui.web.server import WebServer
 
     urls = []
+    watchdog_loops = []
     monkeypatch.setattr(runtime_refs, "set_api_base_url", urls.append)
     monkeypatch.setattr(runtime_refs, "get_api_base_url", lambda: urls[-1] if urls else None)
     monkeypatch.setattr(jarvis_harness, "control_key", lambda: "test-placeholder")
@@ -30,10 +32,12 @@ async def test_desktop_bootstrap_publishes_the_mcp_endpoint(monkeypatch):
         bus=EventBus(),
         cfg=SimpleNamespace(ui=SimpleNamespace(admin_api_port=48123)),
         _voice_ready=True,
+        _start_loop_watchdog=watchdog_loops.append,
         _schedule_anyio_pool_warm=finish,
     )
     with pytest.raises(ProbeFinished):
         await WebServer.start(probe, start_serving=False)
+    assert watchdog_loops == [asyncio.get_running_loop()]
     entry = jarvis_harness.agy_mcp_server_entry("society:nala")
     assert entry["serverUrl"] == "http://127.0.0.1:48123/api/control/mcp/"
     assert entry["headers"]["X-Jarvis-Chat-Session"] == "society:nala"
@@ -144,8 +148,9 @@ async def test_readonly_browser_enforces_action_boundary(tmp_path, monkeypatch, 
         await rt.close()
 
 
+@pytest.mark.parametrize("current_surface", ["jarvis", "society", "coding", None])
 async def test_root_subscription_browser_uses_chat_model_without_changing_roster(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, current_surface
 ):
     from jarvis.society.runtime import SocietyRuntime
     from jarvis.society.surface import browser_tool_for_session
@@ -167,9 +172,18 @@ async def test_root_subscription_browser_uses_chat_model_without_changing_roster
         original = await rt.roster.get(rt.lead_id)
         browser = await browser_tool_for_session("root-chat")
         assert browser is not None
+        if current_surface is None:
+            rt.chat_service = lambda: SimpleNamespace(
+                store=SimpleNamespace(get_session=lambda _: None)
+            )
+        else:
+            session.surface = current_surface
         result = await browser.execute({"task": "Read the page"}, SimpleNamespace())
-        assert result.success
-        assert seen == [(rt.lead_id, "openai-codex", "picked-model")]
+        assert result.success == (current_surface == "jarvis")
+        assert seen == (
+            [(rt.lead_id, "openai-codex", "picked-model")]
+            if current_surface == "jarvis" else []
+        )
         current = await rt.roster.get(rt.lead_id)
         assert (current.provider, current.model) == (original.provider, original.model)
     finally:
