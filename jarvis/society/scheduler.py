@@ -140,6 +140,7 @@ class SocietyScheduler:
         #: Admission locks close check→await→append races in the scheduler.
         self._dispatch_locks: dict[str, asyncio.Lock] = {}
         self._trace_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
+        self._trace_admissions: dict[str, int] = {}
         #: run_id → agent_id of work the scheduler started and has not seen end.
         self._running: dict[str, str] = {}
         self._unsubscribe: Callable[[], None] | None = None
@@ -422,13 +423,18 @@ class SocietyScheduler:
                     return
                 # Re-resolve under both admission locks: the target may have
                 # changed state while another event was being dispatched.
-                if await self._store.count_in_trace(env.trace_id) > self._trace_cap:
+                trace_count = await self._store.count_in_trace(env.trace_id)
+                reserved = self._trace_admissions.get(env.trace_id, 0)
+                if trace_count > self._trace_cap or (
+                    trace_count == 0 and reserved >= self._trace_cap
+                ):
                     await self._veto(
                         env,
                         FailureReason.MESSAGE_CAP,
                         f"trace exceeded {self._trace_cap} messages",
                     )
                     return
+                self._trace_admissions[env.trace_id] = reserved + 1
                 target = await self._resolve_target(env)
                 if isinstance(target, FailureReason):
                     await self._veto(env, target, f"target {env.to_agent!r} cannot take work")
@@ -453,10 +459,17 @@ class SocietyScheduler:
                     await self._veto(env, FailureReason.INTERNAL_ERROR, "no dispatcher is wired")
                     return
                 try:
-                    run_id = await self._dispatch(target, env)
-                except Exception as exc:  # noqa: BLE001 — a failed spawn is a typed veto, never a crash
-                    await self._veto(env, classify_error(exc), f"dispatch failed: {exc}")
-                    return
+                    try:
+                        run_id = await self._dispatch(target, env)
+                    except Exception as exc:  # noqa: BLE001 — a failed spawn is a typed veto, never a crash
+                        await self._veto(env, classify_error(exc), f"dispatch failed: {exc}")
+                        return
+                finally:
+                    remaining = self._trace_admissions.get(env.trace_id, 1) - 1
+                    if remaining > 0:
+                        self._trace_admissions[env.trace_id] = remaining
+                    else:
+                        self._trace_admissions.pop(env.trace_id, None)
                 if not isinstance(run_id, str) or not run_id.strip():
                     await self._veto(
                         env,
