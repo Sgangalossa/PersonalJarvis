@@ -3832,6 +3832,85 @@ async def _vertex_live_voice_sample(
 _vertex_live_voice_sample.requires_api_key = False  # type: ignore[attr-defined]
 
 
+async def _openai_live_voice_sample(
+    api_key: str, *, model: str, voice: str, text: str, language: str
+) -> tuple[bytes, int]:
+    """Sample GPT-Live using the same websocket transport as the live voice call."""
+    del language
+    import base64
+
+    from jarvis.core.protocols import ContinuousVoiceStart
+    from jarvis.plugins.realtime.openai_live import OpenAILiveProvider
+
+    provider = OpenAILiveProvider(api_key=api_key)
+    session = {
+        "model": model or "gpt-live-1",
+        "store": False,
+        "instructions": (
+            "You generate a short voice sample for a settings preview. "
+            "Read the supplied text verbatim and say nothing else."
+        ),
+        "audio": {"output": {"voice": voice}},
+        "output_modalities": ["audio"],
+    }
+    connection = await provider.open_session(
+        ContinuousVoiceStart(session=session, offer_sdp="")
+    )
+    pcm = bytearray()
+    try:
+        # The Live provider returns the opened websocket before consuming the
+        # session.started event; absorb that handshake before sending work.
+        while True:
+            event = await connection.receive()
+            if event.get("type") == "session.started":
+                break
+            if event.get("type") == "error":
+                message = str(
+                    ((event.get("error") or {}).get("message"))
+                    or "OpenAI Live rejected the preview session."
+                )
+                raise RuntimeError(message)
+
+        await connection.send(
+            {
+                "type": "response.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": text}],
+                },
+            }
+        )
+        await connection.send({"type": "response.create"})
+
+        while True:
+            event = await connection.receive()
+            kind = str(event.get("type") or "")
+            if kind == "session.output_audio.delta":
+                delta = event.get("delta")
+                if delta:
+                    pcm.extend(base64.b64decode(delta))
+                continue
+            if kind == "response.event":
+                inner = event.get("event") or {}
+                kind = str(inner.get("type") or "")
+            if kind in {"response.completed", "response.failed", "response.incomplete"}:
+                if kind != "response.completed":
+                    raise RuntimeError("OpenAI Live preview response did not complete.")
+                break
+            if kind == "error":
+                message = str(
+                    ((event.get("error") or {}).get("message"))
+                    or "OpenAI Live rejected the preview response."
+                )
+                raise RuntimeError(message)
+            if kind == "session.closed":
+                break
+    finally:
+        await connection.close()
+    return bytes(pcm), 24_000
+
+
 async def _openai_realtime_voice_sample(
     api_key: str, *, model: str, voice: str, text: str, language: str
 ) -> tuple[bytes, int]:
@@ -3927,7 +4006,7 @@ async def _openai_realtime_voice_sample(
 _REALTIME_PREVIEW_SAMPLERS: dict[str, Any] = {
     "gemini-live": _gemini_live_voice_sample,
     "vertex-live": _vertex_live_voice_sample,
-    "openai-realtime": _openai_realtime_voice_sample,
+    "openai-live": _openai_live_voice_sample,
 }
 
 
