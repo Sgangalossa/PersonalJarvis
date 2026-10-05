@@ -365,7 +365,6 @@ class TaskScheduler:
             current = await self._store.get(tid)
             if current is None or current["state"] != "scheduled":
                 return
-            await self._store.hooks.mark(tid, delivery, "running")
             claimed = await self._store.hooks.claim_running(tid, delivery)
             if not claimed:
                 return
