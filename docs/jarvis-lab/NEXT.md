@@ -77,3 +77,5 @@ Native macOS qualification remains separate and requires physical Accessibility/
 - `0837962` persists MissionCompleted subject deduplication in task steps and adds a restart regression, so a scheduler restart cannot replay the same mission-triggered automation.
 
 - `3cdeb93` atomically claims scheduled task runs in `TaskStore` and guards `TaskRunner` against concurrent duplicate execution, with a focused single-flight regression.
+
+- `205c550` makes task state transitions compare-and-swap across runner completion, deferral and scheduler cancellation, with cancellation losing no scheduler-memory state.
