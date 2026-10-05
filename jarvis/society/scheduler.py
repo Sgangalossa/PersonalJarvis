@@ -32,6 +32,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Final
+from weakref import WeakValueDictionary
 from uuid import uuid4
 
 from .delivery import DeliveryBusy
