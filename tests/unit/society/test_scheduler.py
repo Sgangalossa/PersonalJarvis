@@ -599,7 +599,7 @@ async def test_invalid_result_releases_its_owned_run_slot(world):
     assert dispatcher.calls == [("scout", "invalid")]
 
 
-@pytest.mark.parametrize("run_id", ["", " ", "\t"])
+@pytest.mark.parametrize("run_id", ["", " ", "\t", " run-1 "])
 async def test_blank_result_run_id_releases_sender_slot(world, run_id):
     store, _, scheduler, dispatcher, _ = world
     await store.append_and_publish(_assign("jarvis", "scout", trace="blank-run"))
