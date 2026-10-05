@@ -210,7 +210,10 @@ class TaskRunner:
             return
         except Exception as exc:  # noqa: BLE001
             if isinstance(exc, RoutineDeferred) and ctx.get("hook_delivery_id"):
-                await self._store.update_state(task_id, "scheduled")
+                if not await self._store.update_state(
+                    task_id, "scheduled", expected_state="running"
+                ):
+                    return
                 await self._store.append_step(
                     task_id, "log", {"event": "deferred", "reason": "agent_busy"}
                 )
