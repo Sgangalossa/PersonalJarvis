@@ -202,8 +202,7 @@ async def test_hook_delivery_claim_allows_only_one_concurrent_runner(
         "SELECT status FROM task_hook_deliveries WHERE task_id=? AND delivery_id=?",
         (tid, "delivery-2"),
     )
-    assert status1[0] == "done"
-    assert status2[0] == "pending"
+    assert {status1[0], status2[0]} == {"done", "pending"}
 
 
 async def test_on_event_filter_expr_blocks_non_match(
