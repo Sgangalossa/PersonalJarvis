@@ -293,8 +293,11 @@ class SocietyScheduler:
                 log.warning("society room %s dispatch failed", room_id, exc_info=True)
                 await rooms.fail(room_id, reason=str(classify_error(exc)))
                 return
-            if run_id:
-                self._running[run_id] = target.agent_id
+            if not isinstance(run_id, str) or not run_id.strip():
+                log.warning("society room %s dispatch returned no usable run id", room_id)
+                await rooms.fail(room_id, reason=str(FailureReason.INTERNAL_ERROR))
+                return
+            self._running[run_id.strip()] = target.agent_id
     # ------------------------------------------------------------ handler
 
     async def on_envelope(self, env: SocietyEnvelope) -> None:
@@ -454,6 +457,14 @@ class SocietyScheduler:
                 except Exception as exc:  # noqa: BLE001 — a failed spawn is a typed veto, never a crash
                     await self._veto(env, classify_error(exc), f"dispatch failed: {exc}")
                     return
+                if not isinstance(run_id, str) or not run_id.strip():
+                    await self._veto(
+                        env,
+                        FailureReason.INTERNAL_ERROR,
+                        "dispatch returned no usable run id",
+                    )
+                    return
+                run_id = run_id.strip()
                 self._running[run_id] = target.agent_id
                 await self._store.append_and_publish(
                     SocietyEnvelope(
