@@ -11,12 +11,13 @@ import pytest
 from jarvis.control.cancel import CancelToken
 from jarvis.core.bus import EventBus
 from jarvis.core.events import MessageSent, MissionCompleted
-from jarvis.tasks.scheduler import TaskScheduler, _match_filter
+from jarvis.tasks.scheduler import TaskScheduler, TaskStateConflict, _match_filter
 from jarvis.tasks.schema import (
     SpeakAction,
     TaskSpec,
     TriggerAfterDelay,
     TriggerAtTime,
+    TriggerEvery,
     TriggerOnEvent,
     TriggerWebhook,
 )
