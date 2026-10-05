@@ -419,6 +419,13 @@ class SocietyScheduler:
                     return
                 # Re-resolve under both admission locks: the target may have
                 # changed state while another event was being dispatched.
+                if await self._store.count_in_trace(env.trace_id) > self._trace_cap:
+                    await self._veto(
+                        env,
+                        FailureReason.MESSAGE_CAP,
+                        f"trace exceeded {self._trace_cap} messages",
+                    )
+                    return
                 target = await self._resolve_target(env)
                 if isinstance(target, FailureReason):
                     await self._veto(env, target, f"target {env.to_agent!r} cannot take work")
