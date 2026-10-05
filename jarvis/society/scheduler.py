@@ -434,7 +434,6 @@ class SocietyScheduler:
                         f"trace exceeded {self._trace_cap} messages",
                     )
                     return
-                self._trace_admissions[env.trace_id] = reserved + 1
                 target = await self._resolve_target(env)
                 if isinstance(target, FailureReason):
                     await self._veto(env, target, f"target {env.to_agent!r} cannot take work")
@@ -458,6 +457,7 @@ class SocietyScheduler:
                 if self._dispatch is None:
                     await self._veto(env, FailureReason.INTERNAL_ERROR, "no dispatcher is wired")
                     return
+                self._trace_admissions[env.trace_id] = reserved + 1
                 try:
                     try:
                         run_id = await self._dispatch(target, env)
