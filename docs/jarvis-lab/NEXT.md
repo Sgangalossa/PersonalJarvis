@@ -3,6 +3,7 @@
 Verified on 2026-10-05 after the latest autonomous blocks: reminder scheduling is now exposed as a real Brain tool, preserves the originating turn trace into TaskScheduler, is classified as a write tool (hidden on signalless and screenshot turns), and has a registered capability with EN/DE/IT intent coverage. The installer-smoke release lookup is authenticated, the recent Cost-attribution series is restored and the GPT-Live voice-preview path is now hardened against incomplete session closure. **Exact branch HEAD is deliberately not copied into this file: this document changes HEAD when it is committed. Use the GitHub `jarvis-lab` branch endpoint as the authoritative SHA.** The newest blocks must not be described as green until their active CI run completes.
 
 ## 2026-10-05 continuous reliability state
+- `9896a04`: Windows CI exposed that the persisted-room-recovery regression was seeding no claim; the fixture now creates the claim through the real `SocietyScheduler.drive_room()` path before simulating restart.
 - `308a82f`: task-step sequence allocation is now atomic at the SQLite INSERT boundary, with a concurrent-writer regression preventing `(task_id, seq)` collisions.
 - `c1093c8`: the audio player now has a focused regression proving `AudioOutFirst` is published exactly once and only after the first real PortAudio write.
 - `8e7ced0`: live Society room settlement now has a focused provenance regression preserving the exact room-open event ID, trace ID, room ID and requesting chat session in the projected result notice.
