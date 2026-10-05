@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import asyncio
 
 from jarvis.control.cancel import CancelToken
 from jarvis.core.bus import EventBus
@@ -97,6 +98,40 @@ def bus() -> EventBus:
 # ----------------------------------------------------------------------
 # SpeakAction
 # ----------------------------------------------------------------------
+
+async def test_runner_claims_a_scheduled_task_only_once(
+    store: TaskStore, bus: EventBus
+) -> None:
+    runner = TaskRunner(store=store, bus=bus)
+    spec = TaskSpec(
+        title="single-flight",
+        trigger=TriggerAfterDelay(delay_seconds=1.0),
+        action=SpeakAction(text="x"),
+    )
+    tid = await store.insert(spec)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def slow_execute(*_args: Any, **_kwargs: Any) -> None:
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+
+    runner._execute_action = slow_execute  # type: ignore[method-assign]
+    first = asyncio.create_task(runner.run(tid))
+    await started.wait()
+    second = asyncio.create_task(runner.run(tid))
+    await asyncio.sleep(0)
+    release.set()
+    await asyncio.gather(first, second)
+
+    assert calls == 1
+    task = await store.get(tid)
+    assert task is not None
+    assert task["state"] == "completed"
+
 
 async def test_runner_speak_action_calls_tts(store: TaskStore, bus: EventBus) -> None:
     tts = FakeTTS()
