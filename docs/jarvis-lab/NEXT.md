@@ -1,10 +1,10 @@
 # JARVIS-LAB next remote frontier
 
-Verified on 2026-10-05 after the latest autonomous blocks: reminder scheduling is now exposed as a real Brain tool, preserves the originating turn trace into TaskScheduler, is classified as a write tool (hidden on signalless and screenshot turns), and has a registered capability with EN/DE/IT intent coverage. A known installer-smoke API rate-limit failure was hardened by authenticating the release lookup. A concurrent Cost-attribution series also introduced two syntax corruptions; both were restored without dropping the intended account attribution work. The current branch HEAD is **5c920b77e98e5a8084c49f2e67fb97799892a154**. These newest blocks await their own full GitHub CI qualification and must not be described as green until that evidence exists.
+Verified on 2026-10-05 after the latest autonomous blocks: reminder scheduling is now exposed as a real Brain tool, preserves the originating turn trace into TaskScheduler, is classified as a write tool (hidden on signalless and screenshot turns), and has a registered capability with EN/DE/IT intent coverage. The installer-smoke release lookup is authenticated, the recent Cost-attribution series is restored and the GPT-Live voice-preview path is now hardened against incomplete session closure. **Exact branch HEAD is deliberately not copied into this file: this document changes HEAD when it is committed. Use the GitHub `jarvis-lab` branch endpoint as the authoritative SHA.** The newest blocks must not be described as green until their active CI run completes.
 
 ## 2026-10-05 continuous reliability state
 
-Current verified remote HEAD: `157afa2d496935be154b554f31646a9a786edadf`.
+Last recorded reliability checkpoint below is historical context, not the authoritative current HEAD. Re-read the branch endpoint before acting.
 
 Recent reliability checkpoints now on the branch:
 - `10ae037`: unpinned fallback provider models no longer get clobbered by static tier defaults.
