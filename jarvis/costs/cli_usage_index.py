@@ -1610,7 +1610,7 @@ def _scan(cand: _Candidate, start: int, cursor: _Cursor, deadline: float) -> _Fi
 
 def _wanted(agent: str, raw: bytes) -> bool:
     """The pre-filter that keeps gigabytes of JSON out of ``json.loads``."""
-    if agent == AGENT_CLAUDE:
+    if agent in (AGENT_CLAUDE, AGENT_GLM):
         return _CLAUDE_MARK in raw
     if agent == AGENT_CODEX:
         return any(mark in raw for mark in _CODEX_MARKS)
@@ -1624,7 +1624,7 @@ def _wanted(agent: str, raw: bytes) -> bool:
 def _row_for(
     agent: str, record: Mapping[str, Any], offset: int, cand: _Candidate, cursor: _Cursor
 ) -> _Row | _PricedRow | None:
-    if agent == AGENT_CLAUDE:
+    if agent in (AGENT_CLAUDE, AGENT_GLM):
         return _claude_row(record, cand, cursor)
     if agent == AGENT_CODEX:
         return _codex_row(record, offset, cand, cursor)
