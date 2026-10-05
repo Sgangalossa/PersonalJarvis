@@ -571,14 +571,15 @@ class TaskScheduler:
         running_token = self._running_tokens.get(task_id)
         if running_token is not None:
             running_token.cancel(reason)
-        # Linear scan over the heap — small enough, a typical queue is < 100.
-        self._remove_from_memory(task_id)
-
         expected_state = task["state"]
         if not await self._store.update_state(
             task_id, "cancelled", error=reason, expected_state=expected_state
         ):
             return False
+        # Linear scan over the heap — small enough, a typical queue is < 100.
+        # Remove only after the CAS succeeds, otherwise a losing cancellation
+        # race could silently unschedule a task that is already running again.
+        self._remove_from_memory(task_id)
         await self._store.append_step(task_id, "log", {"event": "cancelled", "reason": reason})
         # Event on the bus
         from jarvis.core.events import TaskCancelled
