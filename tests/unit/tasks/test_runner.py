@@ -99,6 +99,35 @@ def bus() -> EventBus:
 # SpeakAction
 # ----------------------------------------------------------------------
 
+async def test_runner_does_not_overwrite_external_cancel(
+    store: TaskStore, bus: EventBus
+) -> None:
+    runner = TaskRunner(store=store, bus=bus)
+    spec = TaskSpec(
+        title="cancel-race",
+        trigger=TriggerAfterDelay(delay_seconds=1.0),
+        action=SpeakAction(text="x"),
+    )
+    tid = await store.insert(spec)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_execute(*_args: Any, **_kwargs: Any) -> None:
+        started.set()
+        await release.wait()
+
+    runner._execute_action = slow_execute  # type: ignore[method-assign]
+    task = asyncio.create_task(runner.run(tid))
+    await started.wait()
+    assert await store.update_state(tid, "cancelled", error="user_cancel", expected_state="running")
+    release.set()
+    await task
+
+    row = await store.get(tid)
+    assert row is not None
+    assert row["state"] == "cancelled"
+
+
 async def test_runner_claims_a_scheduled_task_only_once(
     store: TaskStore, bus: EventBus
 ) -> None:
