@@ -783,7 +783,7 @@ class WebServer:
 
     def _stop_loop_watchdog(self) -> None:
         """Stop the off-loop watchdog before shutdown work can look like a stall."""
-        watchdog = self._loop_watchdog
+        watchdog = getattr(self, "_loop_watchdog", None)
         self._loop_watchdog = None
         if watchdog is None:
             return
