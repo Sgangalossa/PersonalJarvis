@@ -12108,6 +12108,7 @@ class SpeechPipeline:
         # recovered by re-reading their speech runs. Reported in the audit so
         # "the provider keeps dropping my second sentence" is measurable.
         truncation_repairs = 0
+        truncation_repair_attempts = 0
         # The final pass, INCREMENTAL. It used to run only after key release —
         # the whole recording, window after window — so the wait for the text
         # grew with every second spoken. Now each final window is closed and
@@ -12799,7 +12800,7 @@ class SpeechPipeline:
             avoid. A part that cannot be read keeps the original transcript: a
             dropped middle is worse than the dropped tail it would repair.
             """
-            nonlocal truncation_repairs, tail_repairs
+            nonlocal truncation_repairs, truncation_repair_attempts, tail_repairs
             from jarvis.dictation.merge import (
                 merge_transcripts,
                 transcript_token_count,
@@ -12879,6 +12880,7 @@ class SpeechPipeline:
                     (speech_start + start, speech_start + end)
                     for start, end in halves
                 ]
+            truncation_repair_attempts += 1
             log.warning(
                 "final dictation window looks truncated (%d tokens for %.1fs "
                 "of speech) — re-reading it %s.",
@@ -13613,6 +13615,7 @@ class SpeechPipeline:
                     "post_recording_wait_ms:"
                     f"{round((time.perf_counter() - capture_closed_at) * 1000.0)}",
                     f"truncation_repairs:{truncation_repairs}",
+                    f"truncation_repair_attempts:{truncation_repair_attempts}",
                     f"tail_repairs:{tail_repairs}",
                     f"pause_trim_ms:{round(pause_trim_bytes * 1000 / bytes_per_second)}",
                     f"capture_overflows:{capture_overflows}",
