@@ -12,9 +12,11 @@ from jarvis.plugins.tool.schedule_task import ScheduleTaskTool
 class _FakeScheduler:
     def __init__(self) -> None:
         self.spec = None
+        self.trace_id = None
 
-    async def schedule(self, spec):
+    async def schedule(self, spec, *, trace_id=None):
         self.spec = spec
+        self.trace_id = trace_id
         return "task-123"
 
 
@@ -35,16 +37,18 @@ async def test_schedule_after_delay_creates_durable_agent_task(monkeypatch: pyte
         lambda: _app(scheduler),
     )
 
+    trace_id = "trace-reminder-1"
     result = await ScheduleTaskTool().execute(
         {
             "title": "Call the dentist",
             "reminder_text": "Remember to call the dentist.",
             "delay_seconds": 7200,
         },
-        SimpleNamespace(),
+        SimpleNamespace(trace_id=trace_id),
     )
 
     assert result.success is True
+    assert scheduler.trace_id == trace_id
     assert result.output["task_id"] == "task-123"
     assert result.output["created_by"] == "brain"
     assert scheduler.spec is not None
