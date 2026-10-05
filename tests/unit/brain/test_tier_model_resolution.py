@@ -39,10 +39,11 @@ def _all_test_providers_have_credentials(monkeypatch: pytest.MonkeyPatch) -> Non
     )
 
 
-def _config(provider: str = "gemini") -> JarvisConfig:
+def _config(provider: str = "gemini", *additional_providers: str) -> JarvisConfig:
     cfg = JarvisConfig()
     cfg.brain.router = BrainTierConfig(provider=provider)
-    cfg.brain.providers[provider] = BrainProviderConfig()
+    for provider_id in (provider, *additional_providers):
+        cfg.brain.providers[provider_id] = BrainProviderConfig()
     return cfg
 
 
@@ -72,7 +73,7 @@ def test_provider_model_drives_router_when_tier_model_is_omitted() -> None:
 
 
 def test_unpinned_fallback_uses_live_provider_model_after_frontier_refresh() -> None:
-    cfg = _config()
+    cfg = _config("gemini", "openai")
     cfg.brain.router.provider = "gemini"
     cfg.brain.router.model = "gemini-fast-old"
     cfg.brain.router.fallback_provider = "openai"
