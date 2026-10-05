@@ -202,7 +202,8 @@ class TaskRunner:
         try:
             await self._execute_action(task_id, spec, cancel_token, ctx)
         except _Cancelled as exc:
-            await self._store.update_state(task_id, "cancelled", error=str(exc))
+            if not await self._store.update_state(task_id, "cancelled", error=str(exc), expected_state="running"):
+                return
             await self._store.append_step(
                 task_id, "log", {"event": "run_cancelled", "message": str(exc)}
             )
@@ -222,11 +223,13 @@ class TaskRunner:
             # (live 2026-08-24: the first automation ever added died for
             # good on one provider error and "Run now" refused it as final).
             is_recurring = await self._keeps_schedule(task_id, spec)
-            await self._store.update_state(
+            if not await self._store.update_state(
                 task_id,
                 "scheduled" if is_recurring else "failed",
                 error=error_msg,
-            )
+                expected_state="running",
+            ):
+                return
             await self._store.append_step(task_id, "log", {"event": "error", "message": error_msg})
             await self._bus.publish(
                 TaskFailed(
@@ -264,11 +267,13 @@ class TaskRunner:
         # One-shot triggers terminate as `completed`.
         is_recurring = await self._keeps_schedule(task_id, spec)
         final_state: TaskState = "scheduled" if is_recurring else "completed"
-        await self._store.update_state(
+        if not await self._store.update_state(
             task_id,
             final_state,
             result={"duration_ms": duration_ms},
-        )
+            expected_state="running",
+        ):
+            return
         await self._store.append_step(
             task_id, "log", {"event": "run_completed", "duration_ms": duration_ms}
         )
