@@ -3905,7 +3905,9 @@ async def _openai_live_voice_sample(
                 )
                 raise RuntimeError(message)
             if kind == "session.closed":
-                break
+                raise RuntimeError(
+                    "OpenAI Live closed before the preview response completed."
+                )
     finally:
         await connection.close()
     return bytes(pcm), 24_000
