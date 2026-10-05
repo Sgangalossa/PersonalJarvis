@@ -89,3 +89,5 @@ Native macOS qualification remains separate and requires physical Accessibility/
 - `48317d2` adds a scheduler regression proving `pause()` cannot win a race against an already-running task.
 
 - `d4ee0ff` makes paused `run_now` restoration CAS-safe and only re-registers the task when its persisted spec still exists.
+
+- `789f104` atomically claims pending durable hook deliveries, closing the scheduler restart/dual-drainer window before external task execution.
