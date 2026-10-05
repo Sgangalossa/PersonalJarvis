@@ -396,7 +396,7 @@ class TaskScheduler:
                     and current is not None
                     and current["state"] == "scheduled"
                 ):
-                    await self._store.update_state(tid, "completed")
+                    await self._store.update_state(tid, "completed", expected_state="scheduled")
         except RoutineDeferred:  # Keep the hook pending and retry after a short delay.
             await self._store.hooks.mark(tid, delivery, "pending")
             self._hook_retry_at[tid] = time.monotonic() + 2
@@ -694,7 +694,7 @@ class TaskScheduler:
                 self._firings_left.pop(tid, None)
                 self._known.discard(tid)
                 try:
-                    await self._store.update_state(tid, "completed")
+                    await self._store.update_state(tid, "completed", expected_state="scheduled")
                 except Exception:  # noqa: BLE001
                     log.exception("max_firings cleanup: update_state failed for task_id=%s", tid)
 
