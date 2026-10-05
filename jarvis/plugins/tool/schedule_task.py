@@ -8,11 +8,14 @@ so the reminder can reach the user after the original voice/chat turn ends.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, ClassVar
 
 from jarvis.core import runtime_refs
 from jarvis.core.protocols import ExecutionContext, ToolResult
 from jarvis.tasks.schema import AgentAction, TaskSpec, TriggerAfterDelay, TriggerAtTime
+
+log = logging.getLogger(__name__)
 
 
 class ScheduleTaskTool:
@@ -152,6 +155,7 @@ class ScheduleTaskTool:
         try:
             task_id = await scheduler.schedule(spec, trace_id=trace_id)
         except Exception as exc:  # noqa: BLE001 - scheduler owns persistence/validation
+            log.warning("schedule-task: scheduler rejected reminder %r", spec.title, exc_info=True)
             return ToolResult(
                 False,
                 {"title": spec.title},
@@ -165,6 +169,7 @@ class ScheduleTaskTool:
                 row = await store.get(task_id)
                 due_at_ns = (row or {}).get("due_at_ns")
             except Exception:
+                log.debug("schedule-task: could not read persisted due time for %s", task_id, exc_info=True)
                 due_at_ns = None
 
         return ToolResult(
