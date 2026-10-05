@@ -363,7 +363,8 @@ class TaskStore:
         error: str | None = None,
         result: dict[str, Any] | None = None,
         increment_attempts: bool = False,
-    ) -> None:
+        expected_state: TaskState | None = None,
+    ) -> bool:
         """Transitions to a new state, atomically, with optional error/result info.
 
         Automatically sets ``started_at_ns`` on the transition to ``running``
@@ -399,10 +400,17 @@ class TaskStore:
             sets.append("attempts = attempts + 1")
 
         params.append(task_id)
+        where = " WHERE id = ?"
+        if expected_state is not None:
+            where += " AND state = ?"
+            params.append(expected_state)
         # `sets` is a whitelist of column assignments (built statically
         # above) — no user input flows into the SQL string.
-        sql = f"UPDATE tasks SET {', '.join(sets)} WHERE id = ?"  # noqa: S608
-        await conn.execute(sql, tuple(params))
+        sql = f"UPDATE tasks SET {', '.join(sets)}{where}"  # noqa: S608
+        cur = await conn.execute(sql, tuple(params))
+        changed = cur.rowcount == 1
+        await cur.close()
+        return changed
 
     async def append_step(
         self,
