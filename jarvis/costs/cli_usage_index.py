@@ -1810,6 +1810,44 @@ def _forget_vanished(
         known.pop(key, None)
 
 
+def _rebind_changed_accounts(
+    conn: sqlite3.Connection,
+    candidates: Sequence[_Candidate],
+    known: Mapping[str, sqlite3.Row],
+) -> None:
+    """Move unchanged transcript rows to their current registered account.
+
+    Account ownership can change without a single byte changing in the CLI
+    transcript. Re-reading that file is both unnecessary and unsafe under a
+    short refresh deadline: attribution is metadata, not transcript content.
+    Update the ledger and its resume row together, so the next refresh sees the
+    new owner and can skip the file normally.
+    """
+    for cand in candidates:
+        row = known.get(cand.key)
+        if row is None:
+            continue
+        previous = str(row["account_id"] or "")
+        if previous == cand.account_id:
+            continue
+        try:
+            conn.execute(
+                "UPDATE cli_turns SET account_id = ? WHERE path = ?",
+                (cand.account_id, cand.key),
+            )
+            conn.execute(
+                "UPDATE indexed_files SET account_id = ? WHERE path = ?",
+                (cand.account_id, cand.key),
+            )
+        except sqlite3.Error as exc:
+            log.warning(
+                "cli usage index: could not rebind account for %s (%s)",
+                cand.key,
+                exc,
+            )
+
+
+
 def _resume_rows(conn: sqlite3.Connection) -> dict[str, sqlite3.Row]:
     try:
         return {
@@ -1870,6 +1908,8 @@ def refresh(
     try:
         known = _resume_rows(conn)
         _forget_vanished(conn, candidates, known, home)
+        _rebind_changed_accounts(conn, candidates, known)
+        known = _resume_rows(conn)
         pending = _pending(candidates, known, since_ms)
         # Newest first: the file a user just closed is the one whose numbers
         # they are looking at, and it is the one most likely to be small.
