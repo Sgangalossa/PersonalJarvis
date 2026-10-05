@@ -127,6 +127,7 @@ class ScheduleTaskTool:
                     raise ValueError("timestamp is before the Unix epoch")
             # User-input validation errors are returned to the caller; no stack log is needed.
             except (TypeError, ValueError) as exc:
+                log.debug("schedule-task: invalid reminder timestamp: %s", exc)
                 return ToolResult(False, None, f"invalid_input: invalid ISO timestamp: {exc}")
 
         app = runtime_refs.get_web_app()
