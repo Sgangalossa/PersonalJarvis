@@ -469,10 +469,9 @@ class TaskScheduler:
                 if await self._store.update_state(
                     task_id, restore_state, expected_state="scheduled"
                 ):
-                    self._register_in_memory(
-                        await self._store.get_spec(task_id),
-                        task_id,
-                    )
+                    spec = await self._store.get_spec(task_id)
+                    if spec is not None:
+                        self._register_in_memory(spec, task_id)
         except Exception:  # noqa: BLE001
             log.exception("run_now: could not restore state=%s for task=%s", restore_state, task_id)
 
