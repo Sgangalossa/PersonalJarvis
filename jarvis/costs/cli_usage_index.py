@@ -785,7 +785,10 @@ def _account_id_for_root(agent: str, root: Path) -> str:
                 return str(account.id)
     except Exception as exc:  # noqa: BLE001 - attribution must never stop indexing
         log.debug("cli usage index: account lookup failed for %s (%s)", agent, exc)
-    return ""\n\n\ndef _discover(home: Path | None) -> list[_Candidate]:
+    return ""
+
+
+def _discover(home: Path | None) -> list[_Candidate]:
     """Every transcript on this machine, with its size and mtime.
 
     A root that does not exist is simply not there — that is the state of a
