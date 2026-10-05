@@ -468,7 +468,7 @@ class SocietyScheduler:
     def _release_result_run(self, env: SocietyEnvelope) -> None:
         """Release only a live run slot owned by the RESULT sender."""
         run_id = env.payload.get("run_id")
-        if isinstance(run_id, str):
+        if isinstance(run_id, str) and run_id.strip():
             owner = self._running.get(run_id)
             if owner == env.from_agent:
                 self._running.pop(run_id, None)
