@@ -65,6 +65,6 @@ The current `jarvis-lab` line includes these verified code-level checkpoints:
 - `77644d6` fixes the Ollama dictation test to patch the actual provider-endpoint resolver rather than replacing the entire config loader.
 - `01965ef` cleans the live-policy test fixtures and keeps the regression suite compatible with the restricted-room contract.
 
-The unresolved Frontier item from `docs/BUGS.md` remains deliberately open: `frontier_autoswitch.py` exists and is opt-in, but no verified boot call into `apply_frontier_resolution()` was found on `jarvis-lab`. Do not claim automatic frontier qualification until the real bootstrap path is identified and tested.
+The historical Frontier integration note is resolved in current code: `BrainManager.generate()` invokes the opt-in lazy frontier refresh before the first real turn, guarded by an async lock and skipped for explicit per-turn overrides. `docs/BUGS.md` records the implementation and focused regression coverage. Final CI qualification remains governed by the active workflow run; native macOS qualification remains separate.
 
 Native macOS qualification remains separate and requires physical Accessibility/input permission; remote CI must not be described as MacAgentBench evidence.
