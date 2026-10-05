@@ -93,3 +93,92 @@ async def test_room_dispatch_forces_read_only_chat_turn(monkeypatch: pytest.Monk
     assert incoming.message_id == "claim-1"
     assert incoming.trace_id == "room:room-1"
     assert rooms.bound == ("room-1", "claim-1", "turn-1")
+
+
+@pytest.mark.asyncio
+async def test_room_settlement_projects_exact_open_receipt_and_trace(monkeypatch) -> None:
+    runtime = SocietyRuntime.__new__(SocietyRuntime)
+    notices: list[tuple[str, dict[str, object]]] = []
+
+    class _Store:
+        async def events_for_trace(self, trace_id: str):
+            return [
+                SimpleNamespace(
+                    msg_type=runtime_msg_type("ROOM_OPEN"),
+                    event_id="room-open-42",
+                    trace_id=trace_id,
+                    from_agent="jarvis",
+                    to_agent=None,
+                    text="Discuss the release.",
+                    payload={
+                        "live": True,
+                        "members": ["scout", "archivist"],
+                        "reply_policy": "always",
+                        "reply_surface": "chat",
+                        "reply_session_id": "jarvis-session-7",
+                        "room_id": "room-42",
+                    },
+                ),
+                SimpleNamespace(
+                    msg_type=runtime_msg_type("SAY"),
+                    event_id="say-1",
+                    trace_id=trace_id,
+                    from_agent="scout",
+                    to_agent=None,
+                    text="The release is ready.",
+                    payload={},
+                ),
+            ]
+
+        def list_sessions(self, *, limit: int, surface: str):
+            return []
+
+        def get_session(self, session_id: str):
+            return SimpleNamespace(session_id=session_id, surface="jarvis")
+
+    class _Chat:
+        store = _Store()
+
+        async def post_notice(self, session_id: str, payload: dict[str, object]) -> None:
+            notices.append((session_id, payload))
+
+    def runtime_msg_type(name: str):
+        from jarvis.society.events import MsgType
+        return getattr(MsgType, name)
+
+    runtime.store = _Store()
+    runtime.roster = SimpleNamespace(
+        get=lambda agent_id: _agent(agent_id),
+    )
+    runtime._get_chat = lambda: _Chat()
+    runtime._publish_event = None
+
+    async def _attention(**kwargs):
+        return None
+
+    monkeypatch.setattr(runtime, "publish_attention", _attention)
+
+    def _agent(agent_id: str):
+        return SimpleNamespace(name={"scout": "Scout", "archivist": "Archivist"}[agent_id])
+
+    from jarvis.society.events import MsgType, SocietyEnvelope
+
+    await runtime._room_settled(
+        SocietyEnvelope(
+            msg_type=MsgType.ROOM_SETTLE,
+            from_agent="scheduler",
+            to_agent=None,
+            trace_id="room-trace-42",
+            payload={"room_id": "room-42", "reason": "round_cap"},
+        )
+    )
+
+    assert len(notices) == 1
+    session_id, payload = notices[0]
+    assert session_id == "jarvis-session-7"
+    assert payload["kind"] == "society_room_result"
+    assert payload["room_id"] == "room-42"
+    assert payload["trace_id"] == "room-trace-42"
+    assert payload["room_open_id"] == "room-open-42"
+    assert payload["agent_ids"] == ["scout", "archivist"]
+    assert "Scout: The release is ready." in payload["report"]
