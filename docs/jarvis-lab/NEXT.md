@@ -79,3 +79,5 @@ Native macOS qualification remains separate and requires physical Accessibility/
 - `3cdeb93` atomically claims scheduled task runs in `TaskStore` and guards `TaskRunner` against concurrent duplicate execution, with a focused single-flight regression.
 
 - `205c550` makes task state transitions compare-and-swap across runner completion, deferral and scheduler cancellation, with cancellation losing no scheduler-memory state.
+
+- `3cf2fba` preserves `run_now` on paused recurring tasks after the single-flight runner claim was introduced, restoring the paused state only after a successful CAS.
