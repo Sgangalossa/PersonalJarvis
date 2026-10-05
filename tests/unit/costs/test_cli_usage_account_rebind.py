@@ -11,7 +11,9 @@ from jarvis.costs.cli_usage_index import entries, refresh
 
 def _write(path: Path, lines: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(("\\n".join(lines) + "\\n").encode("utf-8"))
+    path.write_bytes(("
+".join(lines) + "
+").encode("utf-8"))
 
 
 def _claude_line(*, uuid: str, msg_id: str) -> str:
