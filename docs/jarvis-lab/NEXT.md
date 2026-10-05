@@ -1,5 +1,7 @@
 # JARVIS-LAB next remote frontier
 
+Verified on 2026-10-05 after the latest autonomous blocks: reminder scheduling is now exposed as a real Brain tool, preserves the originating turn trace into TaskScheduler, is classified as a write tool (hidden on signalless and screenshot turns), and has a registered capability with EN/DE/IT intent coverage. A known installer-smoke API rate-limit failure was hardened by authenticating the release lookup. A concurrent Cost-attribution series also introduced two syntax corruptions; both were restored without dropping the intended account attribution work. The current branch HEAD is **5c920b77e98e5a8084c49f2e67fb97799892a154**. These newest blocks await their own full GitHub CI qualification and must not be described as green until that evidence exists.
+
 ## 2026-10-05 continuous reliability state
 
 Current verified remote HEAD: `157afa2d496935be154b554f31646a9a786edadf`.
