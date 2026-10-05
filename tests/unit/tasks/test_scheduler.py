@@ -18,6 +18,7 @@ from jarvis.tasks.schema import (
     TriggerAfterDelay,
     TriggerAtTime,
     TriggerOnEvent,
+    TriggerWebhook,
 )
 from jarvis.tasks.store import TaskStore
 
@@ -173,6 +174,31 @@ async def test_on_event_subject_dedup_survives_scheduler_restart(
         assert runner2.dispatched == []
     finally:
         await store2.close()
+
+
+async def test_hook_delivery_claim_allows_only_one_concurrent_runner(
+    store: TaskStore, bus: EventBus, runner: FakeRunner
+) -> None:
+    scheduler = TaskScheduler(store=store, bus=bus, runner=runner)
+    spec = TaskSpec(
+        title="hook-once",
+        trigger=TriggerWebhook(conditions={}),
+        action=SpeakAction(text="x"),
+    )
+    tid = await scheduler.schedule(spec)
+    assert await scheduler.receive_hook(tid, {"value": 1}, "delivery-1") == "queued"
+    rows = await store.hooks.pending()
+    assert len(rows) == 1
+
+    await asyncio.gather(scheduler._run_hook(rows[0]), scheduler._run_hook(rows[0]))
+
+    assert runner.dispatched == [tid]
+    row = await store.hooks._one(
+        "SELECT status FROM task_hook_deliveries WHERE task_id=? AND delivery_id=?",
+        (tid, "delivery-1"),
+    )
+    assert row is not None
+    assert row[0] == "done"
 
 
 async def test_on_event_filter_expr_blocks_non_match(
