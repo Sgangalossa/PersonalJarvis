@@ -95,3 +95,4 @@ Native macOS qualification remains separate and requires physical Accessibility/
 
 - `1e03e81` makes max-firing completion cleanup CAS-safe, so late cleanup cannot overwrite a task that has already failed or been cancelled.
 - `76f8726` makes durable hook delivery claiming single-flight per task across concurrent drainers, so two different pending deliveries cannot both enter the runner; `6894e6a` extends the regression to prove the second delivery remains pending.
+- `b8be072` removes ordering assumptions from the concurrent hook single-flight regression; either delivery may win the claim, but exactly one must finish while the other stays pending.
