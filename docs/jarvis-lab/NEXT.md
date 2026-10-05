@@ -91,3 +91,6 @@ Native macOS qualification remains separate and requires physical Accessibility/
 - `d4ee0ff` makes paused `run_now` restoration CAS-safe and only re-registers the task when its persisted spec still exists.
 
 - `789f104` atomically claims pending durable hook deliveries, closing the scheduler restart/dual-drainer window before external task execution.
+- `4ab1a97` fixes durable hook execution to claim the pending delivery before marking or executing it; `ee9de0b` adds the concurrent-drainer regression proving one delivery reaches the runner once.
+
+- `1e03e81` makes max-firing completion cleanup CAS-safe, so late cleanup cannot overwrite a task that has already failed or been cancelled.
