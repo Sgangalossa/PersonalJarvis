@@ -140,6 +140,55 @@ async def test_room_open_is_driven_by_the_same_scheduler(tmp_path: Path):
         await store.close()
 
 
+async def test_room_recovery_reuses_persisted_claim_after_scheduler_restart(tmp_path: Path):
+    """A persisted in-flight claim is resumed, not replaced, after restart."""
+    path = tmp_path / "room-recovery.db"
+    store = SocietyStore(path)
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Jarvis", tier=Tier.LEAD)
+    await roster.create(name="Scout")
+    await roster.create(name="Archivist")
+    rooms = Rooms(store)
+    opened = await rooms.open(
+        opened_by="jarvis", members=["scout", "archivist"], live=True
+    )
+    loaded = await rooms.get(opened.room_id)
+    assert loaded is not None
+    persisted_claim = loaded.inflight_claim_id
+    assert persisted_claim
+    await store.close()
+
+    reopened = SocietyStore(path)
+    await reopened.open()
+    recovered_rooms = Rooms(reopened)
+    calls: list[str] = []
+
+    async def recover_room_turn(target, room, claim_id):
+        calls.append(claim_id)
+        return f"recovered:{room.room_id}"
+
+    scheduler = SocietyScheduler(
+        reopened,
+        Roster(reopened),
+        rooms=recovered_rooms,
+        room_turn=recover_room_turn,
+        budget_tracker=FakeBudget(),
+    ).attach()
+    try:
+        await scheduler.drive_room(opened.room_id)
+        assert calls == [persisted_claim]
+        assert scheduler.running == {
+            f"recovered:{opened.room_id}": "scout"
+        }
+        recovered = await recovered_rooms.get(opened.room_id)
+        assert recovered is not None
+        assert recovered.inflight_claim_id == persisted_claim
+    finally:
+        scheduler.detach()
+        await reopened.close()
+
+
 async def test_room_rejects_unusable_dispatch_run_id(tmp_path: Path):
     store = SocietyStore(tmp_path / "room-bad-run.db")
     await store.open()
