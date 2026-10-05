@@ -12889,7 +12889,16 @@ class SpeechPipeline:
                 "split at its pauses" if split_at_pauses else "in two halves",
             )
             parts: list[str] = []
-            for start, end in runs:
+            log.debug(
+                "dictation truncation audit: original=%s tokens=%d voiced_s=%.2f "
+                "pieces=%d strategy=%s",
+                safe_preview(text, max_chars=160),
+                tokens,
+                voiced_s,
+                len(runs),
+                "pauses" if split_at_pauses else "halves",
+            )
+            for piece_index, (start, end) in enumerate(runs, start=1):
                 run_piece = piece[start:end]
                 if len(run_piece) < min_bytes:
                     continue
@@ -12902,12 +12911,29 @@ class SpeechPipeline:
                 run_text, run_read = await _read_piece(
                     run_piece, ask_for=run_ask or None
                 )
+                log.debug(
+                    "dictation truncation audit: piece=%d/%d read=%s chars=%d text=%s",
+                    piece_index,
+                    len(runs),
+                    run_read,
+                    len(run_text),
+                    safe_preview(run_text, max_chars=160),
+                )
                 if not run_read:
                     return text
                 if run_text:
                     parts.append(run_text)
             merged = merge_transcripts(parts)
-            if transcript_token_count(merged) > tokens:
+            merged_tokens = transcript_token_count(merged)
+            log.debug(
+                "dictation truncation audit: merged=%s tokens=%d original_tokens=%d "
+                "replaced=%s",
+                safe_preview(merged, max_chars=200),
+                merged_tokens,
+                tokens,
+                merged_tokens > tokens,
+            )
+            if merged_tokens > tokens:
                 truncation_repairs += 1
                 return merged
             return text
