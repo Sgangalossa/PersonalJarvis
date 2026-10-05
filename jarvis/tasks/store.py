@@ -342,6 +342,19 @@ class TaskStore:
         )
         return tid
 
+    async def claim_running(self, task_id: str) -> bool:
+        """Atomically claim a scheduled task for one runner invocation."""
+        conn = self._require_conn()
+        now_ns = time.time_ns()
+        cur = await conn.execute(
+            "UPDATE tasks SET state='running', started_at_ns=?, attempts=attempts+1 "
+            "WHERE id=? AND state='scheduled'",
+            (now_ns, task_id),
+        )
+        claimed = cur.rowcount == 1
+        await cur.close()
+        return claimed
+
     async def update_state(
         self,
         task_id: str,
