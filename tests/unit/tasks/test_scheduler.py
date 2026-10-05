@@ -10,7 +10,7 @@ import pytest
 
 from jarvis.control.cancel import CancelToken
 from jarvis.core.bus import EventBus
-from jarvis.core.events import MessageSent
+from jarvis.core.events import MessageSent, MissionCompleted
 from jarvis.tasks.scheduler import TaskScheduler, _match_filter
 from jarvis.tasks.schema import (
     SpeakAction,
@@ -138,6 +138,41 @@ async def test_on_event_dispatches_when_event_published(
 
     # runner.run ist awaited direkt im subscribe_all-Handler, also synchron.
     assert runner.dispatched == [str(spec.id)]
+
+
+async def test_on_event_subject_dedup_survives_scheduler_restart(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "event-dedup.db"
+    bus1 = EventBus()
+    store1 = TaskStore(db)
+    await store1.init()
+    runner1 = FakeRunner()
+    scheduler1 = TaskScheduler(store=store1, bus=bus1, runner=runner1)
+    scheduler1.bind_bus()
+    spec = TaskSpec(
+        title="mission-once",
+        trigger=TriggerOnEvent(event_name="MissionCompleted", filter_expr=None),
+        action=SpeakAction(text="x"),
+    )
+    await scheduler1.schedule(spec)
+    event = MissionCompleted(mission_id="mission-42", status="approved")
+    await bus1.publish(event)
+    assert runner1.dispatched == [str(spec.id)]
+    await store1.close()
+
+    bus2 = EventBus()
+    store2 = TaskStore(db)
+    await store2.init()
+    runner2 = FakeRunner()
+    scheduler2 = TaskScheduler(store=store2, bus=bus2, runner=runner2)
+    try:
+        await scheduler2.hydrate()
+        scheduler2.bind_bus()
+        await bus2.publish(event)
+        assert runner2.dispatched == []
+    finally:
+        await store2.close()
 
 
 async def test_on_event_filter_expr_blocks_non_match(
