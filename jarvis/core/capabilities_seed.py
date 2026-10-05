@@ -148,7 +148,7 @@ _SEED_CAPABILITIES: list[Capability] = [
             "erinner", "erinnere", "erinnern", "erinnere mich",
         ),
         objects=(
-            "promemoria", "promemoria", "reminder", "reminders",
+            "promemoria", "reminder", "reminders",
             "erinnerung", "erinnerungen", "ricordo", "ricordi",
         ),
         description="Create a durable reminder that runs later through the Tasks scheduler.",
