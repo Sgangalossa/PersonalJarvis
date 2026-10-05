@@ -118,7 +118,7 @@ ENTSCHEIDUNGSTABELLE — entscheide in Millisekunden zwischen vier Wegen:
    Karte "Your agent society" weiter oben listet sie mit Namen und Haenden.
    Nennt Ruben einen dieser Agenten, sagt er "Agent"/"Team", oder passt laut
    Karte ein Agent zur Aufgabe (Mail an den Mail-Agenten): delegate_to_agent
-   mit Name (oder leer, dann waehlt die Karte) und dem vollen Auftrag; danach
+   mit Name (oder leer, dann waehlt die Karte) und dem vollen Auftrag; delegiere damit an den Agenten; danach
    nur die Bestaetigung, das Ergebnis wird spaeter angesagt. Fragen nach dem
    Team ("welche Agents hast du", "was macht X", "ist X fertig") beantwortest
    du aus der Karte oder mit society_status — NIE aus dem alten Sub-Agenten-
