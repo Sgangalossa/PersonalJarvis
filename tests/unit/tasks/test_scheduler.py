@@ -302,6 +302,27 @@ def test_filter_expr_rejects_dangerous_input() -> None:
 # Running-task cancellation (deep-dive 2026-07-15, H-03)
 # ----------------------------------------------------------------------
 
+async def test_pause_race_does_not_remove_running_task(
+    store: TaskStore, bus: EventBus, runner: FakeRunner
+) -> None:
+    scheduler = TaskScheduler(store=store, bus=bus, runner=runner)
+    spec = TaskSpec(
+        title="pause-race",
+        trigger=TriggerEvery(interval_seconds=60),
+        action=SpeakAction(text="x"),
+    )
+    tid = await scheduler.schedule(spec)
+    assert tid
+    task = await store.get(tid)
+    assert task is not None
+    assert await store.update_state(tid, "running", expected_state="scheduled")
+    with pytest.raises(TaskStateConflict):
+        await scheduler.pause(tid)
+    row = await store.get(tid)
+    assert row is not None
+    assert row["state"] == "running"
+
+
 async def test_cancel_task_fires_the_running_runs_token(
     store: TaskStore, bus: EventBus
 ) -> None:
