@@ -192,7 +192,9 @@ class TaskRunner:
             return
 
         ctx = _event_context(trigger_event)
-        await self._store.update_state(task_id, "running", increment_attempts=True)
+        if not await self._store.claim_running(task_id):
+            log.info("TaskRunner: task_id %s is already running or no longer scheduled", task_id)
+            return
         await self._store.append_step(task_id, "log", {"event": "run_started"})
         await self._bus.publish(TaskStarted(task_id=task_id, source_layer="tasks.runner"))
 
