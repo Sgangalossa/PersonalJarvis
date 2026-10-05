@@ -10162,6 +10162,14 @@ class SpeechPipeline:
                         thinking_detector.stop_output()
                     await session.handle_audio_frame(pcm)
 
+                async def _flush_startup_preroll() -> None:
+                    """Deliver startup audio even when no later frame wakes the pump."""
+                    nonlocal preroll_bytes
+                    while preroll:
+                        buffered = preroll.popleft()
+                        preroll_bytes = max(0, preroll_bytes - len(buffered))
+                        await _process_microphone_pcm(buffered)
+
                 async def _send_microphone() -> None:
                     nonlocal preroll_bytes
                     async for chunk in self._session_input_stream(input_chunks):
@@ -10179,10 +10187,7 @@ class SpeechPipeline:
                             preroll.append(chunk.pcm)
                             preroll_bytes += len(chunk.pcm)
                             continue
-                        while preroll:
-                            buffered = preroll.popleft()
-                            preroll_bytes = max(0, preroll_bytes - len(buffered))
-                            await _process_microphone_pcm(buffered)
+                        await _flush_startup_preroll()
                         await _process_microphone_pcm(chunk.pcm)
 
                 # A shared capture buffer already owns and meters production
@@ -10280,6 +10285,11 @@ class SpeechPipeline:
                 wait_tasks.discard(build_task)
                 wait_tasks.discard(handshake_task)
                 provider_ready.set()
+                # A frame may have entered ``preroll`` in the scheduling gap
+                # between the transport's audio_ready callback and this local
+                # gate. Drain it now: waiting for another microphone frame can
+                # strand a one-frame barge-in forever.
+                await _flush_startup_preroll()
                 if microphone_task is None:
                     microphone_task = asyncio.create_task(
                         _send_microphone(), name=f"rt-mic-{session_id}"
