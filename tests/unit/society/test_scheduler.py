@@ -140,6 +140,40 @@ async def test_room_open_is_driven_by_the_same_scheduler(tmp_path: Path):
         await store.close()
 
 
+async def test_room_rejects_unusable_dispatch_run_id(tmp_path: Path):
+    store = SocietyStore(tmp_path / "room-bad-run.db")
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Jarvis", tier=Tier.LEAD)
+    await roster.create(name="Scout")
+    await roster.create(name="Archivist")
+    rooms = Rooms(store)
+    calls = []
+
+    async def broken_room_turn(target, room, claim_id):
+        calls.append((target.agent_id, room.room_id, claim_id))
+        return "   "
+
+    scheduler = SocietyScheduler(
+        store,
+        roster,
+        rooms=rooms,
+        room_turn=broken_room_turn,
+        budget_tracker=FakeBudget(),
+    ).attach()
+    try:
+        opened = await rooms.open(opened_by="jarvis", members=["scout", "archivist"], live=True)
+        loaded = await rooms.get(opened.room_id)
+        assert calls and loaded is not None
+        assert loaded.state is RoomState.FAILED
+        assert loaded.settle_reason == str(FailureReason.INTERNAL_ERROR)
+        assert loaded.inflight_claim_id == ""
+        assert scheduler.running == {}
+    finally:
+        scheduler.detach()
+        await store.close()
+
+
 async def test_concurrent_rooms_respect_target_run_cap(tmp_path: Path):
     store = SocietyStore(tmp_path / "rooms-concurrent.db")
     await store.open()
