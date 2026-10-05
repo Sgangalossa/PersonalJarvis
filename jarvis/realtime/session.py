@@ -280,7 +280,7 @@ _FAILURE_REASON_MAX_CHARS = 160
 # them; the answer to a spoken question lives in the first few, and everything
 # past that is prompt weight paid on the turn-critical path for nothing.
 _LOOKUP_FACT_MAX_ITEMS = 5
-_LOOKUP_FACT_MAX_CHARS = 4_000
+_LOOKUP_FACT_MAX_CHARS = 320
 # A delegated turn fails for a handful of KNOWN internal reasons, and the raw
 # internal strings are engineering vocabulary ("No configured Tool Model
 # completed the delegated turn.") that must never be spoken. Each cause maps to
