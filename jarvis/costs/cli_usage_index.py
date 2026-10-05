@@ -2135,11 +2135,7 @@ def _pending(
         # run stopped early — on its deadline, on the per-file cap, or on a
         # half-written trailing line — and there is still tail to read.
         if row is not None and _int(row["byte_offset"]) >= cand.size:
-            if (
-                _int(row["size"]) == cand.size
-                and _int(row["mtime_ns"]) == cand.mtime_ns
-                and str(row["account_id"] or "") == cand.account_id
-            ):
+            if _int(row["size"]) == cand.size and _int(row["mtime_ns"]) == cand.mtime_ns:
                 continue
         out.append(cand)
     return out
