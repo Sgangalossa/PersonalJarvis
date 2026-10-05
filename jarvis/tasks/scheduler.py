@@ -366,6 +366,9 @@ class TaskScheduler:
             if current is None or current["state"] != "scheduled":
                 return
             await self._store.hooks.mark(tid, delivery, "running")
+            claimed = await self._store.hooks.claim_running(tid, delivery)
+            if not claimed:
+                return
             await self._store.append_step(
                 tid, "log", {"event": "hook_started", "delivery_id": delivery}
             )
