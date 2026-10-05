@@ -641,8 +641,12 @@ class TaskScheduler:
             # subject (e.g. one mission's terminal event). Skips WITHOUT touching
             # the max_firings counter, so a re-published event cannot drain it.
             dedup_key = _dedup_key(tid, event)
+            subject = dedup_key[1] if dedup_key is not None else None
             if dedup_key is not None:
                 if dedup_key in self._fired_dedup:
+                    continue
+                if await self._store.event_fired_for_subject(tid, subject):
+                    self._fired_dedup[dedup_key] = None
                     continue
                 self._fired_dedup[dedup_key] = None
                 self._trim_dedup()
@@ -656,7 +660,10 @@ class TaskScheduler:
                     self._firings_left.pop(tid, None)
                     continue
                 self._firings_left[tid] = left - 1
-            await self._store.append_step(tid, "log", {"event": "event_fired"})
+            payload = {"event": "event_fired"}
+            if subject is not None:
+                payload["subject"] = subject
+            await self._store.append_step(tid, "log", payload)
             await self._dispatch_runner(tid, trigger_event=event_ctx)
             # If that was the last fire: clean up.
             if left is not None and left - 1 <= 0:
