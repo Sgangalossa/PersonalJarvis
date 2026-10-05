@@ -73,3 +73,5 @@ The current `jarvis-lab` line includes these verified code-level checkpoints:
 The historical Frontier integration note is resolved in current code: `BrainManager.generate()` invokes the opt-in lazy frontier refresh before the first real turn, guarded by an async lock and skipped for explicit per-turn overrides. `docs/BUGS.md` records the implementation and focused regression coverage. Final CI qualification remains governed by the active workflow run; native macOS qualification remains separate.
 
 Native macOS qualification remains separate and requires physical Accessibility/input permission; remote CI must not be described as MacAgentBench evidence.
+
+- `0837962` persists MissionCompleted subject deduplication in task steps and adds a restart regression, so a scheduler restart cannot replay the same mission-triggered automation.
