@@ -1830,7 +1830,9 @@ def _rebind_changed_accounts(
         previous = str(row["account_id"] or "")
         if previous == cand.account_id:
             continue
+        savepoint = "rebind_account"
         try:
+            conn.execute(f"SAVEPOINT {savepoint}")
             conn.execute(
                 "UPDATE cli_turns SET account_id = ? WHERE path = ?",
                 (cand.account_id, cand.key),
@@ -1839,7 +1841,17 @@ def _rebind_changed_accounts(
                 "UPDATE indexed_files SET account_id = ? WHERE path = ?",
                 (cand.account_id, cand.key),
             )
+            conn.execute(f"RELEASE SAVEPOINT {savepoint}")
         except sqlite3.Error as exc:
+            try:
+                conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+            except sqlite3.Error:
+                log.debug(
+                    "cli usage index: account rebind savepoint cleanup failed for %s",
+                    cand.key,
+                    exc_info=True,
+                )
             log.warning(
                 "cli usage index: could not rebind account for %s (%s)",
                 cand.key,
