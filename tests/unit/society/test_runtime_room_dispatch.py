@@ -147,9 +147,10 @@ async def test_room_settlement_projects_exact_open_receipt_and_trace(monkeypatch
         return getattr(MsgType, name)
 
     runtime.store = _Store()
-    runtime.roster = SimpleNamespace(
-        get=lambda agent_id: _agent(agent_id),
-    )
+    async def _get_agent(agent_id: str):
+        return _agent(agent_id)
+
+    runtime.roster = SimpleNamespace(get=_get_agent)
     runtime._get_chat = lambda: _Chat()
     runtime._publish_event = None
 
