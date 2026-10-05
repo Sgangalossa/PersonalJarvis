@@ -295,6 +295,13 @@ class SocietyScheduler:
                 await rooms.fail(room_id, reason=str(classify_error(exc)))
                 return
             if not isinstance(run_id, str) or not run_id.strip():
+                current = await rooms.get(room_id)
+                if (
+                    current is None
+                    or current.state is not RoomState.RUNNING
+                    or current.inflight_claim_id != claim_id
+                ):
+                    return
                 log.warning("society room %s dispatch returned no usable run id", room_id)
                 await rooms.fail(room_id, reason=str(FailureReason.INTERNAL_ERROR))
                 return
