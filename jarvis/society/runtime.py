@@ -39,6 +39,7 @@ from .conversation import ConversationArchive
 from .curator import Curator
 from .delivery import DeliveryBusy, IncomingMessage, incoming_context
 from .events import MsgType, QuestState, RoomState, SocietyEnvelope, Tier
+from .failure_reasons import FailureReason
 from .focus import derive_approval_rules, derive_focus
 from .learning import AgentSkills, LearningPass, TurnDigest, default_creator_factory
 from .memory import SocietyMemory
@@ -1088,7 +1089,7 @@ class SocietyRuntime:
                     else {}
                 ),
             )
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             svc.unsubscribe(session.session_id, queue)
             raise
         finally:
@@ -1215,7 +1216,9 @@ class SocietyRuntime:
                 try:
                     await svc.cancel(session.session_id, expected_turn_id=turn_id)
                 except Exception:  # noqa: BLE001 — room state is already authoritative
-                    log.warning("society room turn could not be cancelled after lost claim", exc_info=True)
+                    log.warning(
+                        "society room turn could not be cancelled after lost claim", exc_info=True
+                    )
                 finally:
                     svc.unsubscribe(session.session_id, queue)
                 raise
@@ -1274,13 +1277,19 @@ class SocietyRuntime:
                         try:
                             await svc.cancel(session_id, expected_turn_id=turn_id)
                         except Exception:  # noqa: BLE001 — fail the owned claim even if cancellation fails
-                            log.warning("society room recovery cancellation failed for %s", run_id, exc_info=True)
+                            log.warning(
+                                "society room recovery cancellation failed for %s",
+                                run_id, exc_info=True,
+                            )
                         try:
                             recovered = await asyncio.to_thread(
                                 svc.store.turn_terminal, session_id, turn_id,
                             )
                         except Exception:  # noqa: BLE001 — unavailable accounting is never invented
-                            log.warning("society room recovery cost unavailable for %s", run_id, exc_info=True)
+                            log.warning(
+                                "society room recovery cost unavailable for %s",
+                                run_id, exc_info=True,
+                            )
                             recovered = None
                         terminal = {"payload": {
                             "turn_id": turn_id,

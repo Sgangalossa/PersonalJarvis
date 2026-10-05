@@ -49,7 +49,9 @@ class FakeService:
     def is_running(self, session_id: str) -> bool:
         return session_id in self.busy
 
-    async def send(self, session_id: str, text: str, attachments=None, *, incoming=None, read_only=False) -> str:
+    async def send(
+        self, session_id: str, text: str, attachments=None, *, incoming=None, read_only=False
+    ) -> str:
         self.sent.append((session_id, text))
         return "turn-1"
 
@@ -696,7 +698,9 @@ class FakeTurnService(FakeService):
         if q in subscribers:
             subscribers.remove(q)
 
-    async def send(self, session_id: str, text: str, attachments=None, *, incoming=None, read_only=False) -> str:
+    async def send(
+        self, session_id: str, text: str, attachments=None, *, incoming=None, read_only=False
+    ) -> str:
         self.sent.append((session_id, text))
         turn_id = f"turn-{len(self.sent)}"
         if incoming is not None:
@@ -783,6 +787,43 @@ async def test_assign_runs_in_the_canonical_chat_and_ends_as_a_result(tmp_path: 
         assert attention[0].agent_ids == ("scout",)
     finally:
         await rt.close()
+
+
+@pytest.mark.parametrize("failure", ["cancelled_send", "failed_send"])
+async def test_assignment_send_failure_releases_subscription(tmp_path: Path, monkeypatch, failure):
+    import asyncio
+
+    from jarvis.society.delivery import incoming_context
+
+    svc = FakeTurnService(AgentChatStore(tmp_path / "agent_chat.db"))
+    cfg = SimpleNamespace(memory=SimpleNamespace(data_dir=str(tmp_path / "data")))
+    rt = SocietyRuntime(
+        tmp_path, seed_starter_team=False, chat_service=lambda: svc, cfg=lambda: cfg,
+    )
+    await rt.ensure_started()
+    try:
+        scout, _ = await rt.roster.create(name="Scout", provider="openai")
+        env = SocietyEnvelope(
+            msg_type=MsgType.ASSIGN, from_agent="user", to_agent="scout",
+            trace_id="interrupted-assignment", payload={"text": "Inspect the task."},
+        )
+        previous = incoming_context.get()
+        error = asyncio.CancelledError if failure == "cancelled_send" else RuntimeError
+
+        async def interrupted_send(*args, **kwargs):
+            assert incoming_context.get().message_id == env.event_id
+            raise error("assignment interrupted")
+
+        monkeypatch.setattr(svc, "send", interrupted_send)
+        with pytest.raises(error):
+            await rt._dispatch_chat(scout, env)
+        assert incoming_context.get() is previous
+        assert svc.queues["society:scout"] == []
+        assert not rt._watchers
+        assert rt.scheduler.running == {}
+    finally:
+        await rt.close()
+        svc.store.close()
 
 
 @pytest.mark.parametrize("failure", ["cancelled_send", "lost_claim"])
@@ -1041,6 +1082,16 @@ async def test_kill_switch_recovers_cancelled_room_cost_without_watcher_queue(
     finally:
         await rt.close()
         svc.store.close()
+
+
+async def test_settle_missing_room_reports_typed_failure(world):
+    from jarvis.society.failure_reasons import FailureReason
+    from jarvis.society.rooms import RoomError
+
+    rt, _, _ = world
+    with pytest.raises(RoomError) as caught:
+        await rt.settle_room("missing-room", reason="user")
+    assert caught.value.reason == FailureReason.TARGET_UNKNOWN
 
 
 async def test_manual_room_settle_cancels_owned_turn_and_recovers_cost(tmp_path: Path):

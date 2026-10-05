@@ -568,12 +568,24 @@ async def test_concurrent_assignments_respect_target_run_cap(world):
     assert scheduler.running == {"run-1": "scout"}
     assert await _vetoes(store, "race-b") == [str(FailureReason.CONCURRENCY_CAP)]
 
-async def test_concurrent_assignments_respect_trace_message_cap(world):
+async def test_concurrent_assignments_respect_trace_message_cap(world, monkeypatch):
     store, _, scheduler, _, _ = world
-    scheduler._trace_cap = 1
+    scheduler._trace_cap = 2
     started = asyncio.Event()
     release = asyncio.Event()
     dispatched: list[str] = []
+    waiting = asyncio.Event()
+    trace_lock = scheduler._trace_lock
+    lock_requests = 0
+
+    def observed_trace_lock(trace_id):
+        nonlocal lock_requests
+        lock_requests += 1
+        if lock_requests == 2:
+            waiting.set()
+        return trace_lock(trace_id)
+
+    monkeypatch.setattr(scheduler, "_trace_lock", observed_trace_lock)
 
     async def slow_dispatch(target, env):
         dispatched.append(env.trace_id)
@@ -584,10 +596,15 @@ async def test_concurrent_assignments_respect_trace_message_cap(world):
     scheduler._dispatch = slow_dispatch
     first = _assign("jarvis", "scout", trace="same-trace")
     second = _assign("jarvis", "archivist", trace="same-trace")
+    # Real scheduler inputs are durable before dispatch. Both ASSIGN rows
+    # fit the cap; the first CLAIM must push the waiting assignment over it.
+    await store.import_event(first)
     first_task = asyncio.create_task(scheduler._on_assign(first))
     await started.wait()
+    await store.import_event(second)
+    assert await store.count_in_trace("same-trace") == 2
     second_task = asyncio.create_task(scheduler._on_assign(second))
-    await asyncio.sleep(0)
+    await asyncio.wait_for(waiting.wait(), timeout=2)
     assert not second_task.done()
     release.set()
     await asyncio.gather(first_task, second_task)
