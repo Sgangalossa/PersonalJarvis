@@ -81,3 +81,5 @@ Native macOS qualification remains separate and requires physical Accessibility/
 - `205c550` makes task state transitions compare-and-swap across runner completion, deferral and scheduler cancellation, with cancellation losing no scheduler-memory state.
 
 - `3cf2fba` preserves `run_now` on paused recurring tasks after the single-flight runner claim was introduced, restoring the paused state only after a successful CAS.
+
+- `642b54c` makes pause use the same state CAS as cancellation, so a task that starts running between the read and the pause request is not silently paused or removed from the scheduler index.
