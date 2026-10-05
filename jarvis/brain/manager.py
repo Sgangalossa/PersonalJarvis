@@ -958,7 +958,7 @@ _DETERMINISTIC_WRITE_TOOL_NAMES: frozenset[str] = frozenset({
     # sat here since introduction, so the signalless gate never actually
     # stripped update_profile (found in the 2026-07-06 pipeline audit).
     "contact-upsert", "update_profile", "wiki-ingest", "google_calendar",
-    "call-contact",
+    "call-contact", "schedule-task",
 })
 
 # Tools withheld on a turn that carries a CAPTURED SCREEN image. Screen pixels
