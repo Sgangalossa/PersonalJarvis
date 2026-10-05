@@ -10097,13 +10097,74 @@ class SpeechPipeline:
                     for pcm in frames:
                         await session.handle_audio_frame(pcm)
 
+                async def _process_microphone_pcm(pcm: bytes) -> None:
+                    """Run one captured frame through the live half-duplex gates.
+
+                    Startup preroll and live capture must share this exact path. The
+                    provider handshake can expose a transport-level ``audio_ready``
+                    before this session flips its local ``provider_ready`` gate; a
+                    frame captured in that scheduling gap therefore lives in
+                    ``preroll``. Sending that buffer directly used to bypass the
+                    playback barge detector, dropping the user's first confirmed
+                    speech and leaving the session waiting forever for a barge event.
+                    """
+                    nonlocal post_output_echo_guard_until, tail_pending_bytes
+                    nonlocal thinking_barge_quiet_since
+                    now = time.monotonic()
+                    echo_guard_active = bool(
+                        speaking or now < post_output_echo_guard_until
+                    )
+                    if echo_guard_active:
+                        interrupted_pcm = await asyncio.get_running_loop().run_in_executor(
+                            barge_feed_executor,
+                            barge_detector.feed,
+                            pcm,
+                        )
+                        if interrupted_pcm is None:
+                            if not speaking and now >= post_output_hw_tail_until:
+                                tail_pending.append(pcm)
+                                tail_pending_bytes += len(pcm)
+                                while (
+                                    tail_pending_bytes > _REALTIME_TAIL_PENDING_MAX_BYTES
+                                    and len(tail_pending) > 1
+                                ):
+                                    dropped = tail_pending.popleft()
+                                    tail_pending_bytes -= len(dropped)
+                            return
+                        log.info("Realtime desktop barge-in confirmed by local CPU VAD")
+                        _clear_tail_pending()
+                        post_output_echo_guard_until = 0.0
+                        await session.handle_control({"type": "barge_in"})
+                        await session.handle_audio_frame(interrupted_pcm)
+                        return
+                    if bool(getattr(barge_detector, "active", False)):
+                        barge_detector.stop_output()
+                    await _flush_tail_pending()
+                    if thinking_barge_armed(session, now):
+                        if not thinking_detector.active:
+                            thinking_detector.start_output()
+                        confirmed_pcm = await asyncio.get_running_loop().run_in_executor(
+                            barge_feed_executor,
+                            thinking_detector.feed,
+                            pcm,
+                        )
+                        if confirmed_pcm is not None:
+                            log.info(
+                                "Realtime desktop barge-in confirmed by local CPU VAD "
+                                "while Jarvis was thinking"
+                            )
+                            thinking_detector.stop_output()
+                            thinking_barge_quiet_since = 0.0
+                            await session.handle_control({"type": "barge_in"})
+                            await session.handle_audio_frame(confirmed_pcm)
+                            return
+                    elif thinking_detector.active:
+                        thinking_detector.stop_output()
+                    await session.handle_audio_frame(pcm)
+
                 async def _send_microphone() -> None:
-                    nonlocal post_output_echo_guard_until, preroll_bytes
-                    nonlocal tail_pending_bytes, thinking_barge_quiet_since
+                    nonlocal preroll_bytes
                     async for chunk in self._session_input_stream(input_chunks):
-                        # ``handle_audio_frame`` bounds its provider send with a
-                        # timeout; on 3.11 that can eat the teardown's cancel
-                        # (BUG-185). One frame later it is honoured here.
                         raise_if_cancelling()
                         if not provider_ready.is_set():
                             if (
@@ -10121,99 +10182,8 @@ class SpeechPipeline:
                         while preroll:
                             buffered = preroll.popleft()
                             preroll_bytes = max(0, preroll_bytes - len(buffered))
-                            await session.handle_audio_frame(buffered)
-                        now = time.monotonic()
-                        echo_guard_active = bool(
-                            speaking or now < post_output_echo_guard_until
-                        )
-                        if echo_guard_active:
-                            interrupted_pcm = await asyncio.get_running_loop(
-                            ).run_in_executor(
-                                barge_feed_executor,
-                                barge_detector.feed,
-                                chunk.pcm,
-                            )
-                            if interrupted_pcm is None:
-                                # Provider half-duplex remains intact: speaker
-                                # echo, including the hardware playback tail,
-                                # is inspected locally but never uploaded.
-                                # Past the audible phase the frame cannot be
-                                # echo anymore — retain it for the tail flush
-                                # instead of dropping the user's first words.
-                                if (
-                                    not speaking
-                                    and now >= post_output_hw_tail_until
-                                ):
-                                    tail_pending.append(chunk.pcm)
-                                    tail_pending_bytes += len(chunk.pcm)
-                                    while (
-                                        tail_pending_bytes
-                                        > _REALTIME_TAIL_PENDING_MAX_BYTES
-                                        and len(tail_pending) > 1
-                                    ):
-                                        dropped = tail_pending.popleft()
-                                        tail_pending_bytes -= len(dropped)
-                                continue
-                            log.info(
-                                "Realtime desktop barge-in confirmed by local CPU VAD"
-                            )
-                            # The detector's capture supersedes the buffered
-                            # tail frames (they overlap its pre-speech window).
-                            _clear_tail_pending()
-                            post_output_echo_guard_until = 0.0
-                            await session.handle_control({"type": "barge_in"})
-                            await session.handle_audio_frame(interrupted_pcm)
-                            continue
-                        if bool(getattr(barge_detector, "active", False)):
-                            barge_detector.stop_output()
-                        await _flush_tail_pending()
-                        # THINKING-PHASE BARGE-IN. Everything above this line
-                        # only runs while audio plays, which is why speaking
-                        # over Jarvis worked and speaking over his THINKING
-                        # did nothing (live 2026-08-13 12:11:12: the provider
-                        # edge was deferred and he answered the original
-                        # question 11.7 s later regardless). The same Silero
-                        # detector, armed for the silent wait, closes that
-                        # hole with the mechanism that already works.
-                        #
-                        # Arming is deliberately two-condition:
-                        #   - the session owes a reply and nothing is audible;
-                        #   - the microphone has fallen quiet since the turn
-                        #     was committed, so the user's OWN trailing words
-                        #     cannot arm it against themselves (that shape is
-                        #     turn fragmentation, handled by the session's
-                        #     _user_is_speaking hold, not by a barge).
-                        # The frame is still uploaded either way — unlike the
-                        # playback branch there is no echo to withhold, and
-                        # the words have to reach the provider or the
-                        # interruption would take the floor and say nothing.
-                        if thinking_barge_armed(session, now):
-                            if not thinking_detector.active:
-                                thinking_detector.start_output()
-                            confirmed_pcm = await asyncio.get_running_loop(
-                            ).run_in_executor(
-                                barge_feed_executor,
-                                thinking_detector.feed,
-                                chunk.pcm,
-                            )
-                            if confirmed_pcm is not None:
-                                log.info(
-                                    "Realtime desktop barge-in confirmed by "
-                                    "local CPU VAD while Jarvis was thinking"
-                                )
-                                thinking_detector.stop_output()
-                                thinking_barge_quiet_since = 0.0
-                                await session.handle_control(
-                                    {"type": "barge_in"}
-                                )
-                                # The detector's own capture carries the
-                                # opening syllables its confirmation consumed;
-                                # uploading the raw frame too would double them.
-                                await session.handle_audio_frame(confirmed_pcm)
-                                continue
-                        elif thinking_detector.active:
-                            thinking_detector.stop_output()
-                        await session.handle_audio_frame(chunk.pcm)
+                            await _process_microphone_pcm(buffered)
+                        await _process_microphone_pcm(chunk.pcm)
 
                 # A shared capture buffer already owns and meters production
                 # input, so leave it unread until the provider accepts audio.
