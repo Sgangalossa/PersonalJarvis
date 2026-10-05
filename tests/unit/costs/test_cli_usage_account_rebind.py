@@ -11,31 +11,31 @@ from jarvis.costs.cli_usage_index import entries, refresh
 
 def _write(path: Path, lines: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(("
-".join(lines) + "
-").encode("utf-8"))
+    path.write_bytes(("\n".join(lines) + "\n").encode("utf-8"))
 
 
 def _claude_line(*, uuid: str, msg_id: str) -> str:
-    return json.dumps({
-        "type": "assistant",
-        "uuid": uuid,
-        "requestId": f"req_{msg_id}",
-        "sessionId": "sess-1",
-        "timestamp": "2026-08-23T17:16:09.424Z",
-        "cwd": "/work/personal-jarvis",
-        "message": {
-            "id": msg_id,
-            "model": "claude-opus-5",
-            "usage": {
-                "input_tokens": 10,
-                "cache_creation_input_tokens": 5,
-                "cache_read_input_tokens": 7,
-                "output_tokens": 20,
-                "output_tokens_details": {"thinking_tokens": 8},
+    return json.dumps(
+        {
+            "type": "assistant",
+            "uuid": uuid,
+            "requestId": f"req_{msg_id}",
+            "sessionId": "sess-1",
+            "timestamp": "2026-08-23T17:16:09.424Z",
+            "cwd": "/work/personal-jarvis",
+            "message": {
+                "id": msg_id,
+                "model": "claude-opus-5",
+                "usage": {
+                    "input_tokens": 10,
+                    "cache_creation_input_tokens": 5,
+                    "cache_read_input_tokens": 7,
+                    "output_tokens": 20,
+                    "output_tokens_details": {"thinking_tokens": 8},
+                },
             },
-        },
-    })
+        }
+    )
 
 
 def _claude_path(home: Path) -> Path:
