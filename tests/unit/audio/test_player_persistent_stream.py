@@ -405,6 +405,7 @@ async def test_audio_out_first_publishes_once_after_first_real_write(monkeypatch
 
         async def publish(self, event: object) -> None:
             self.published.append(event)
+            events.append("audio_out_first")
 
     bus = _Bus()
     player._bus = bus
@@ -413,6 +414,8 @@ async def test_audio_out_first_publishes_once_after_first_real_write(monkeypatch
     await player.play_chunks(_one_chunk(b"\\x01\\x00" * 4_000))
 
     first_write = next(i for i, event in enumerate(events) if event.startswith("write@"))
+    first_audio_event = events.index("audio_out_first")
+    assert first_audio_event > first_write
     assert len(bus.published) == 1
     assert isinstance(bus.published[0], AudioOutFirst)
     assert first_write >= 0
