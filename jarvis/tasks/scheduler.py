@@ -440,6 +440,11 @@ class TaskScheduler:
         if spec.trigger.type in ("after_delay", "at_time"):
             self._remove_from_memory(task_id)
         restore_state = "paused" if state == "paused" else None
+        if restore_state is not None:
+            if not await self._store.update_state(
+                task_id, "scheduled", expected_state="paused"
+            ):
+                raise TaskStateConflict("task changed before run-now could start")
         await self._store.append_step(task_id, "log", {"event": "run_now"})
         task_obj = asyncio.create_task(
             self._run_now_and_settle(task_id, restore_state),
