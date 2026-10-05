@@ -279,7 +279,7 @@ _FAILURE_REASON_MAX_CHARS = 160
 # (``_lookup_facts``). Three search variants return up to fifteen rows between
 # them; the answer to a spoken question lives in the first few, and everything
 # past that is prompt weight paid on the turn-critical path for nothing.
-_LOOKUP_FACT_MAX_ITEMS = 50
+_LOOKUP_FACT_MAX_ITEMS = 5
 _LOOKUP_FACT_MAX_CHARS = 4_000
 # A delegated turn fails for a handful of KNOWN internal reasons, and the raw
 # internal strings are engineering vocabulary ("No configured Tool Model
