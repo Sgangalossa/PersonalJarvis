@@ -540,7 +540,10 @@ class TaskScheduler:
         if spec.trigger.type in ("every", "calendar", "cron"):
             due = next_every_due_ns(spec, now)
             await self._store.set_next_due(task_id, due)
-        await self._store.update_state(task_id, "scheduled")
+        if not await self._store.update_state(
+            task_id, "scheduled", expected_state="paused"
+        ):
+            raise TaskStateConflict("task changed before resume could be applied")
         await self._store.append_step(task_id, "log", {"event": "resumed"})
         self._register_in_memory(spec, task_id, stored_due_at_ns=due)
         if notify_activation:
