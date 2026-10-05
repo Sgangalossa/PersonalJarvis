@@ -317,6 +317,15 @@ class TestSeedRegistry:
         seed_ids = {c.id for c in _SEED_CAPABILITIES}
         assert seed_ids.issubset(ids)
 
+    def test_reminder_scheduler_capability_is_registered(self) -> None:
+        ids = {c.id for c in self.reg.all()}
+        assert "tool.schedule-task" in ids
+
+    def test_reminder_request_resolves_to_scheduler(self) -> None:
+        result = self.reg.resolve_intent("Ricordami di chiamare Anna domani")  # i18n-allow
+        assert result is not None
+        assert result.id == "tool.schedule-task"
+
     def test_router_tools_present(self) -> None:
         ids = {c.id for c in self.reg.all()}
         for tool in (
