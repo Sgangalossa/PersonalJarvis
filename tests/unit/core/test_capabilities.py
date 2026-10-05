@@ -416,6 +416,7 @@ class TestSeedRegistry:
             "tool.spawn-worker",
             "tool.run-skill",
             "tool.wiki-ingest",
+            "tool.schedule-task",
         }
         caps_by_id = {c.id: c for c in self.reg.all()}
         for cap_id in action_ids:
