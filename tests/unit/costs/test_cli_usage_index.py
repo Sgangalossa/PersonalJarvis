@@ -599,6 +599,59 @@ def test_cli_account_root_mapping_uses_registry_id(
     assert cli_usage_index._account_id_for_root(AGENT_CLAUDE, root) == "claude:work"
 
 
+def test_schema_five_index_migrates_and_reindexes_with_account_attribution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = tmp_path / "data"
+    db = data / "cli_usage_index.db"
+    db.parent.mkdir(parents=True)
+    old_cli_turns = """
+    CREATE TABLE cli_turns (
+        agent TEXT NOT NULL, dedup_key TEXT NOT NULL, path TEXT NOT NULL DEFAULT '',
+        session_id TEXT NOT NULL DEFAULT '', ts_ms INTEGER NOT NULL DEFAULT 0,
+        model TEXT NOT NULL DEFAULT '', tokens_in INTEGER NOT NULL DEFAULT 0,
+        tokens_out INTEGER NOT NULL DEFAULT 0, tokens_cached INTEGER NOT NULL DEFAULT 0,
+        cwd TEXT NOT NULL DEFAULT '', label TEXT NOT NULL DEFAULT '',
+        cost_usd REAL NOT NULL DEFAULT 0,
+        PRIMARY KEY (agent, dedup_key)
+    );
+    CREATE TABLE indexed_files (
+        path TEXT PRIMARY KEY, agent TEXT NOT NULL,
+        session_id TEXT NOT NULL DEFAULT '', size INTEGER NOT NULL DEFAULT 0,
+        mtime_ns INTEGER NOT NULL DEFAULT 0, byte_offset INTEGER NOT NULL DEFAULT 0,
+        model TEXT NOT NULL DEFAULT '', cwd TEXT NOT NULL DEFAULT '',
+        label TEXT NOT NULL DEFAULT '', scanned_ms INTEGER NOT NULL DEFAULT 0
+    );
+    """
+    with sqlite3.connect(db) as conn:
+        conn.executescript(old_cli_turns)
+        conn.execute(
+            "INSERT INTO cli_turns "
+            "(agent, dedup_key, path, session_id, ts_ms, model, tokens_in, tokens_out) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            ("codex-cli", "legacy", "/gone", "legacy", T0, "old-model", 1, 1),
+        )
+        conn.execute("PRAGMA user_version=5")
+
+    session = "019ffba8-3748-7652-bf9d-f3b54697b10a"
+    _write(_codex_path(tmp_path, session), [*_codex_prelude(session), _codex_token_line()])
+
+    monkeypatch.setattr(
+        "jarvis.costs.cli_usage_index._account_id_for_root",
+        lambda agent, root: "codex:default",
+    )
+    refresh(data_dir=data, home=tmp_path)
+
+    with sqlite3.connect(db) as conn:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(cli_turns)")}
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+    assert "account_id" in cols
+    assert version == 6
+
+    turns = _all(data)
+    assert any(turn.account_id == "codex:default" for turn in turns)
+    assert any(turn.model == "old-model" for turn in turns)
+
 def test_cli_index_assigns_and_persists_account_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
