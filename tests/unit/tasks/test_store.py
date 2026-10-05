@@ -1,6 +1,7 @@
 """Unit tests for TaskStore — CRUD + startup cleanup + append_step."""
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
