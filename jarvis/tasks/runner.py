@@ -187,7 +187,10 @@ class TaskRunner:
         # Early cancel probe (before the state change)
         if cancel_token is not None and cancel_token.is_cancelled():
             await self._store.update_state(
-                task_id, "cancelled", error=cancel_token.reason or "cancelled"
+                task_id,
+                "cancelled",
+                error=cancel_token.reason or "cancelled",
+                expected_state="scheduled",
             )
             return
 
