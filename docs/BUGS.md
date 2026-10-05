@@ -3804,14 +3804,15 @@ health, and a zero-error run row are never sufficient evidence by themselves.
 Never recover a silent tool turn by replaying the original request; recover
 from the retained result so a side effect can occur at most once.
 
-## BUG-053: A normal realtime barge-in ends the call when cancellation loses a response-boundary race (HIGH, LARGELY FIXED 2026-07-14 — correction 3 open)
+## BUG-053: A normal realtime barge-in ends the call when cancellation loses a response-boundary race (HIGH, FIXED 2026-10-05)
 
-> **Status update (2026-07-14, afternoon).** Corrections 1 and 2 are
-> implemented (see BUG-056 below, which is the same defect fired through the
-> scrub-cancel path): `response_cancel_not_active` is now a recoverable
-> provider event, and `interrupt()` skips the wire cancel when no response
-> lifecycle is active. Correction 3 (preserve and forward the accepted
-> barge-in audio into the next turn) remains open.
+> **Status update (2026-10-05).** All three corrections are now implemented.
+> The OpenAI adapter treats `response_cancel_not_active` as a recoverable
+> lifecycle race and avoids unnecessary wire cancellation when no response is
+> active. The desktop speech pipeline preserves the detector's pre-roll plus
+> confirmed speech and forwards that payload immediately after `barge_in`,
+> without uploading the triggering raw frame twice. The end-to-end regression
+> in `tests/unit/speech/test_realtime_mode.py` pins that ordering.
 
 **Symptom.** During a healthy desktop realtime session, the user began a
 follow-up about NotebookLM and its MCP server while the preceding answer was
