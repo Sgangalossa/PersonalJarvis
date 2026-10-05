@@ -465,8 +465,14 @@ class TaskScheduler:
         # a manual run must not silently switch a paused automation back on.
         try:
             task = await self._store.get(task_id)
-            if task is not None and task["state"] not in ("running", "cancelled"):
-                await self._store.update_state(task_id, restore_state)  # type: ignore[arg-type]
+            if task is not None and task["state"] == "scheduled":
+                if await self._store.update_state(
+                    task_id, restore_state, expected_state="scheduled"
+                ):
+                    self._register_in_memory(
+                        await self._store.get_spec(task_id),
+                        task_id,
+                    )
         except Exception:  # noqa: BLE001
             log.exception("run_now: could not restore state=%s for task=%s", restore_state, task_id)
 
