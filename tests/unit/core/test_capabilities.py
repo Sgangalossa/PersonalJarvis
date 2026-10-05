@@ -459,6 +459,11 @@ class TestSeedRegistry:
             "wie ist das Wetter?"  # i18n-allow
         ) is False
 
+    def test_has_action_intent_recognizes_reminder_requests(self) -> None:
+        assert self.reg.has_action_intent("remind me in two hours") is True
+        assert self.reg.has_action_intent("Erinnere mich morgen um 9 Uhr") is True  # i18n-allow
+        assert self.reg.has_action_intent("Ricordami di chiamare Anna") is True
+
     def test_has_action_intent_deverbal_noun_is_not_a_command(self) -> None:
         """Determiner-led deverbal nouns ('eine ganz generelle Frage', 'die  # i18n-allow: bug quote
         Antwort') must not impersonate their verb stems ('frag', 'antwort'):
