@@ -176,6 +176,17 @@ class TaskStore:
         row = await cursor.fetchone()
         return int(row[0]) if row else 0
 
+    async def event_fired_for_subject(self, task_id: str, subject: str) -> bool:
+        """Return whether an event rule already fired for this persisted subject."""
+        cursor = await self._require_conn().execute(
+            "SELECT 1 FROM task_steps WHERE task_id=? AND kind='log' "
+            "AND json_extract(payload_json, '$.event')='event_fired' "
+            "AND json_extract(payload_json, '$.subject')=? LIMIT 1",
+            (task_id, subject),
+        )
+        row = await cursor.fetchone()
+        return row is not None
+
     async def _tasks_table_sql(self) -> str | None:
         conn = self._require_conn()
         cur = await conn.execute(
