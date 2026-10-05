@@ -140,6 +140,22 @@ _SEED_CAPABILITIES: list[Capability] = [
         requires_evidence=True,
     ),
     Capability(
+        id="tool.schedule-task",
+        source="router_tool",
+        verbs=(
+            "ricord", "ricorda", "ricordami",
+            "remind", "remindme",
+            "erinner", "erinnere", "erinnern", "erinnere mich",
+        ),
+        objects=(
+            "promemoria", "promemoria", "reminder", "reminders",
+            "erinnerung", "erinnerungen", "ricordo", "ricordi",
+        ),
+        description="Create a durable reminder that runs later through the Tasks scheduler.",
+        risk_tier="monitor",
+        requires_evidence=True,
+    ),
+    Capability(
         id="tool.run-skill",
         source="router_tool",
         verbs=_ACTION_VERBS + ("skill", "faehigkeit", "fähigkeit"),  # i18n-allow
