@@ -694,10 +694,9 @@ class TaskScheduler:
                 task_ids.discard(tid)
                 self._firings_left.pop(tid, None)
                 self._known.discard(tid)
-                try:
-                    await self._store.update_state(tid, "completed", expected_state="scheduled")
-                except Exception:  # noqa: BLE001
-                    log.exception("max_firings cleanup: update_state failed for task_id=%s", tid)
+                # TaskRunner owns the running -> completed transition after
+                # the final action finishes. Completing here races its
+                # scheduled -> running claim and can suppress the last firing.
 
     # ------------------------------------------------------------------
     # Hydration

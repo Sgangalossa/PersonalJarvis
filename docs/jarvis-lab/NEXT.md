@@ -100,3 +100,5 @@ Native macOS qualification remains separate and requires physical Accessibility/
 - CI #438 exposed two scheduler regressions in the active branch. Paused `run_now` now removes the recurring task from every in-memory dispatch structure after restoring its durable paused state, and the concurrent pause guard imports the trigger and conflict types it exercises. The two focused regressions pass locally with Ruff clean; full CI qualification remains pending.
 
 - CI #438 also exposed duplicate `AudioOutFirst` receipts across sentence-level `play_chunks()` calls sharing one persistent output stream. The receipt flag now follows the native stream lifetime and resets only when a replacement stream opens; the focused persistent-stream regression passes with Ruff clean.
+
+- Finite event routines now let `TaskRunner` own the final running-to-completed transition. The scheduler removes the exhausted rule from its indexes without completing it before the runner can claim it, preserving the last firing across hydration; the focused calendar-routine contract passes with Ruff clean.
