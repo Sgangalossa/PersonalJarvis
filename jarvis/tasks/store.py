@@ -393,21 +393,24 @@ class TaskStore:
         'retry').
         """
         conn = self._require_conn()
+        # Allocate the per-task sequence inside the INSERT itself. Keeping
+        # MAX(seq) and INSERT as separate statements lets concurrent writers
+        # observe the same next sequence and collide on PRIMARY KEY(task_id, seq).
         cur = await conn.execute(
-            "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM task_steps WHERE task_id = ?",
-            (task_id,),
+            """
+            INSERT INTO task_steps (task_id, seq, kind, payload_json, timestamp_ns)
+            SELECT ?, COALESCE(MAX(seq), 0) + 1, ?, ?, ?
+            FROM task_steps
+            WHERE task_id = ?
+            RETURNING seq
+            """,
+            (task_id, kind, json.dumps(payload, ensure_ascii=False), time.time_ns(), task_id),
         )
         row = await cur.fetchone()
         await cur.close()
-        seq = int(row["max_seq"]) + 1 if row else 1
-        await conn.execute(
-            """
-            INSERT INTO task_steps (task_id, seq, kind, payload_json, timestamp_ns)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (task_id, seq, kind, json.dumps(payload, ensure_ascii=False), time.time_ns()),
-        )
-        return seq
+        if row is None:  # pragma: no cover - aggregate SELECT always yields one row
+            raise RuntimeError("failed to allocate task step sequence")
+        return int(row["seq"])
 
     async def list(
         self,
