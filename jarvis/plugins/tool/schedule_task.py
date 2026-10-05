@@ -76,7 +76,7 @@ class ScheduleTaskTool:
 
     async def execute(self, args: dict[str, Any], ctx: ExecutionContext) -> ToolResult:
         """Validate the public contract, then hand the TaskSpec to the live scheduler."""
-        del ctx
+        trace_id = str(ctx.trace_id)
         if not isinstance(args, dict):
             return ToolResult(False, None, "invalid_input: args must be an object")
 
@@ -150,7 +150,7 @@ class ScheduleTaskTool:
         )
 
         try:
-            task_id = await scheduler.schedule(spec)
+            task_id = await scheduler.schedule(spec, trace_id=trace_id)
         except Exception as exc:  # noqa: BLE001 - scheduler owns persistence/validation
             return ToolResult(
                 False,
