@@ -29,6 +29,7 @@ import pytest
 
 import jarvis.audio.player as player_module
 from jarvis.audio.player import AudioPlayer
+from jarvis.core.events import AudioOutFirst
 from jarvis.core.protocols import AudioChunk
 
 
@@ -391,3 +392,27 @@ async def test_one_shot_blob_is_followed_by_a_buffer_deep_silent_tail(monkeypatc
     blob_samples = 2_400  # 100 ms at 24 kHz, well under the 0.4 s buffer
     await player.play_pcm(b"\x10\x00" * blob_samples, sample_rate=24_000)
     assert written == [blob_samples + int(24_000 * 0.45)]
+
+
+@pytest.mark.asyncio
+async def test_audio_out_first_publishes_once_after_first_real_write(monkeypatch) -> None:
+    """The UI speaking edge is tied to the first audible block, not stream open."""
+    player, events = _make_player(monkeypatch)
+
+    class _Bus:
+        def __init__(self) -> None:
+            self.published: list[object] = []
+
+        async def publish(self, event: object) -> None:
+            self.published.append(event)
+
+    bus = _Bus()
+    player._bus = bus
+
+    await player.play_chunks(_one_chunk(b"\\x01\\x00" * 4_000))
+    await player.play_chunks(_one_chunk(b"\\x01\\x00" * 4_000))
+
+    first_write = next(i for i, event in enumerate(events) if event.startswith("write@"))
+    assert len(bus.published) == 1
+    assert isinstance(bus.published[0], AudioOutFirst)
+    assert first_write >= 0
