@@ -79,7 +79,7 @@ class ScheduleTaskTool:
 
     async def execute(self, args: dict[str, Any], ctx: ExecutionContext) -> ToolResult:
         """Validate the public contract, then hand the TaskSpec to the live scheduler."""
-        trace_id = str(ctx.trace_id)
+        trace_id = str(getattr(ctx, "trace_id", "") or "")
         if not isinstance(args, dict):
             return ToolResult(False, None, "invalid_input: args must be an object")
 
