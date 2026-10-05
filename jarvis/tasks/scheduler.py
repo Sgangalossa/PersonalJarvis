@@ -574,7 +574,7 @@ class TaskScheduler:
         # Linear scan over the heap — small enough, a typical queue is < 100.
         self._remove_from_memory(task_id)
 
-        expected_state = str(task["state"])
+        expected_state = task["state"]
         if not await self._store.update_state(
             task_id, "cancelled", error=reason, expected_state=expected_state
         ):
