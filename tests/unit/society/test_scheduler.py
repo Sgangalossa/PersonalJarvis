@@ -153,6 +153,21 @@ async def test_room_recovery_reuses_persisted_claim_after_scheduler_restart(tmp_
     opened = await rooms.open(
         opened_by="jarvis", members=["scout", "archivist"], live=True
     )
+    async def initial_room_turn(target, room, claim_id):
+        return f"initial:{room.room_id}"
+
+    initial_scheduler = SocietyScheduler(
+        store,
+        roster,
+        rooms=rooms,
+        room_turn=initial_room_turn,
+        budget_tracker=FakeBudget(),
+    ).attach()
+    try:
+        await initial_scheduler.drive_room(opened.room_id)
+    finally:
+        initial_scheduler.detach()
+
     loaded = await rooms.get(opened.room_id)
     assert loaded is not None
     persisted_claim = loaded.inflight_claim_id
