@@ -68,6 +68,7 @@ CREATE TABLE agent_chat_events (
 """
 
 T0 = 1_780_000_000_000
+_FAR_FUTURE = 9_999_999_999_999
 
 
 def _sessions_db(path: Path) -> None:
@@ -996,7 +997,7 @@ def test_a_bring_your_own_key_cli_row_is_billed_at_its_recorded_price(tmp_path: 
         ("opencode-cli", "m1", "p", "s1", t0, "gpt-5.5", 1000, 50, 0, "", "app", 0.0123),
         ("opencode-cli", "m2", "p", "s1", t0 + 1000, "nemotron:free", 1000, 50, 0, "", "app", 0.0),
     ]
-    conn.executemany("INSERT INTO cli_turns VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+    conn.executemany("INSERT INTO cli_turns VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", [(*row, "") for row in rows])
     conn.commit()
     conn.close()
 
