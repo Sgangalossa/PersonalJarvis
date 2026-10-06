@@ -2797,6 +2797,12 @@ body {
     opacity: 0.35;
     transform: none !important;
   }
+
+  /* Command-center geometry also obeys the app-wide motion floor. */
+  .jarvis-reactor-ring,
+  .jarvis-reactor-core {
+    animation: none !important;
+  }
 }
 
 /*
@@ -3111,12 +3117,6 @@ body {
   .jarvis-command-footer { padding-inline: 18px; }
   .jarvis-command-footer span:nth-child(2) { display: none; }
 }
-@media (prefers-reduced-motion: reduce) {
-  .jarvis-reactor-ring,
-  .jarvis-reactor-core { animation: none !important; }
-}
-
-
 .jarvis-home-header {
   display: flex;
   min-height: 56px;
