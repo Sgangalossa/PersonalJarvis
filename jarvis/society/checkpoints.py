@@ -368,9 +368,9 @@ class CheckpointEngine:
         # one-loop window in which the first tool_call can be published before
         # the watcher has registered its queue.
         queue = svc.subscribe(session_id)
-        task = loop.create_task(self._watch_turn(agent_id, session_id, queue))
+        task = loop.create_task(self._watch_turn(agent_id, session_id, queue, svc))
         self._watchers[agent_id] = task
-        task.add_done_callback(lambda t, a=agent_id: self._watcher_done(a, t))
+        task.add_done_callback(lambda t, a=agent_id, q=queue, service=svc: self._watcher_done(a, t, service, session_id, q))
 
     async def note_tool_call(
         self, agent_id: str, tool_name: str, *, cli_seat: bool = False
@@ -418,11 +418,12 @@ class CheckpointEngine:
     # -------------------------------------------------------- turn watcher
 
     async def _watch_turn(
-        self, agent_id: str, session_id: str, queue: asyncio.Queue[dict[str, Any]]
+        self,
+        agent_id: str,
+        session_id: str,
+        queue: asyncio.Queue[dict[str, Any]],
+        svc: Any,
     ) -> None:
-        svc = self._chat_service()
-        if svc is None:
-            return
         try:
             agent = await self._runtime.roster.get(agent_id)
             cli_seat = agent is not None and self._cli_seat(agent)
@@ -452,7 +453,15 @@ class CheckpointEngine:
             # Runs on the loop even when the task is cancelled during shutdown.
             self._fire(agent_id, "turn")
 
-    def _watcher_done(self, agent_id: str, task: asyncio.Task[None]) -> None:
+    def _watcher_done(
+        self,
+        agent_id: str,
+        task: asyncio.Task[None],
+        svc: Any,
+        session_id: str,
+        queue: asyncio.Queue[dict[str, Any]],
+    ) -> None:
+        svc.unsubscribe(session_id, queue)
         if self._watchers.get(agent_id) is task:
             self._watchers.pop(agent_id, None)
 
