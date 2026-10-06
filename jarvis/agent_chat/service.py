@@ -514,7 +514,9 @@ class AgentChatService:
         )
         if stored is None:
             return self.store.incoming_message(session_id, incoming.message_id) or incoming.model_dump()
-        self._publish_stored_event(session_id, stored)
+        publish = getattr(self, "_publish_stored_event", None)
+        if publish is not None:
+            publish(session_id, stored)
         return stored["payload"]
 
     async def message_status(
