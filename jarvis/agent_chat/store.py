@@ -436,7 +436,7 @@ class AgentChatStore:
         out["ts_ms"] = ts_ms
         return out
 
-    def append_notice_once(self, session_id: str, payload: dict[str, Any], *, dedupe_key: str) -> bool:
+    def append_notice_once(self, session_id: str, payload: dict[str, Any], *, dedupe_key: str) -> dict[str, Any] | None:
         """Persist a notice only if no prior notice carries ``dedupe_key``.
 
         The check and insert share one SQLite IMMEDIATE transaction, so two
@@ -455,7 +455,7 @@ class AgentChatStore:
                 ).fetchall()
                 if any(json.loads(row["payload"]).get("_dedupe_key") == dedupe_key for row in rows):
                     self._conn.rollback()
-                    return False
+                    return None
                 row = self._conn.execute(
                     "SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM agent_chat_events WHERE session_id = ?",
                     (session_id,),
