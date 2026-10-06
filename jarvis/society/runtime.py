@@ -352,6 +352,25 @@ class SocietyRuntime:
             status = str(result.payload.get("status") or "done")
             if not should_report(request, status):
                 continue
+            correlated = [
+                item
+                for item in events
+                if item.trace_id == result.trace_id
+                and item.parent_event_id == request.event_id
+                and item.from_agent == result.from_agent
+                and item.to_agent == request.from_agent
+            ]
+            blocked_report = any(
+                item.msg_type is MsgType.ANSWER
+                and item.payload.get("reply_status") == "blocked"
+                for item in correlated
+            )
+            questions = any(
+                item.msg_type in (MsgType.QUERY, MsgType.PROPOSE)
+                for item in correlated
+            )
+            if questions and not blocked_report:
+                continue
             target = await self.roster.get(result.from_agent)
             if target is None:
                 continue
