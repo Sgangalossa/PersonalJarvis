@@ -436,6 +436,43 @@ class AgentChatStore:
         out["ts_ms"] = ts_ms
         return out
 
+    def append_notice_once(self, session_id: str, payload: dict[str, Any], *, dedupe_key: str) -> bool:
+        """Persist a notice only if no prior notice carries ``dedupe_key``.
+
+        The check and insert share one SQLite IMMEDIATE transaction, so two
+        runtime processes racing after restart cannot both publish the same
+        durable projection.
+        """
+        if not dedupe_key.strip():
+            raise ValueError("dedupe_key must be non-empty")
+        ts_ms = now_ms()
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                rows = self._conn.execute(
+                    "SELECT payload FROM agent_chat_events WHERE session_id = ? AND kind = 'notice'",
+                    (session_id,),
+                ).fetchall()
+                if any(json.loads(row["payload"]).get("_dedupe_key") == dedupe_key for row in rows):
+                    self._conn.rollback()
+                    return False
+                row = self._conn.execute(
+                    "SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM agent_chat_events WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+                seq = int(row["next"]) if row else 1
+                stored = dict(payload)
+                stored["_dedupe_key"] = dedupe_key
+                self._conn.execute(
+                    "INSERT INTO agent_chat_events (session_id, seq, ts_ms, kind, payload) VALUES (?, ?, ?, ?, ?)",
+                    (session_id, seq, ts_ms, "notice", json.dumps(stored, ensure_ascii=False)),
+                )
+                self._conn.execute("UPDATE agent_chat_sessions SET updated_ms = ? WHERE session_id = ?", (ts_ms, session_id))
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return True
     def incoming_message(self, session_id: str, message_id: str) -> dict[str, Any] | None:
         """Fold a receipt and its status updates; old user messages stay untouched."""
         receipt = None
