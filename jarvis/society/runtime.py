@@ -478,6 +478,7 @@ class SocietyRuntime:
         await self._deliver_lead_result(
             sender, request, status=status, summary=env.text,
             kind="society_message", message_type=str(env.msg_type).lower(),
+            dedupe_id=env.event_id,
         )
 
     async def publish_attention(
@@ -516,7 +517,7 @@ class SocietyRuntime:
 
     async def _deliver_lead_result(
         self, target: AgentRecord, request: SocietyEnvelope, *, status: str,
-        summary: str, kind: str, message_type: str = "",
+        summary: str, kind: str, message_type: str = "", dedupe_id: str = "",
     ) -> None:
         from jarvis.core.delegation import result_announcement
 
@@ -547,7 +548,7 @@ class SocietyRuntime:
                         await post_once(
                             session_id,
                             payload,
-                            dedupe_key=f"{kind}:{request.event_id}",
+                            dedupe_key=f"{kind}:{dedupe_id or request.event_id}",
                         )
                     else:
                         await post(session_id, payload)
