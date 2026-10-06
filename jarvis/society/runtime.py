@@ -288,6 +288,7 @@ class SocietyRuntime:
         except Exception:  # noqa: BLE001 — curation recovery must not block the society
             log.warning("society: curator recovery failed", exc_info=True)
         self.scheduler._budget = self._get_budget()  # noqa: SLF001 — the runtime owns its scheduler
+        await self.scheduler.recover_run_slots()
         self.scheduler.attach()
         self._delivery_unsubscribe = self.store.bus.subscribe_all(self._delivery_failed)
         self._lead_incoming_unsubscribe = self.store.bus.subscribe_all(self._on_lead_incoming)
