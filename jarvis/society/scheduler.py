@@ -592,6 +592,12 @@ class SocietyScheduler:
                             )
                         except Exception:
                             log.warning("society: queued receipt projection failed", exc_info=True)
+                        else:
+                            # receive persisted the receipt in the occupied
+                            # canonical chat without starting another turn. It
+                            # is therefore terminally delivered and must not be
+                            # replayed by the next recovery drain.
+                            await self._store.mark_delivery(env.event_id, "delivered")
                     continue
                 if not await self._on_deliver(env):
                     busy.add(env.to_agent)
