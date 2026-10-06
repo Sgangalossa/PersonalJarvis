@@ -212,6 +212,23 @@ def test_provider_error_is_reported_not_raised(tmp_path: Path, monkeypatch: pyte
     asyncio.run(scenario())
 
 
+def test_post_notice_once_publishes_the_single_persisted_event(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        svc = AgentChatService(AgentChatStore(":memory:"))
+        session = svc.create_session(provider="fakeprov", cwd=str(tmp_path), surface="jarvis")
+        queue = svc.subscribe(session.session_id)
+        payload = {"kind": "society_room_result", "room_open_id": "open-2", "settle_event_id": "settle-2"}
+
+        assert await svc.post_notice_once(session.session_id, payload, dedupe_key="society_room_result:open-2")
+        assert not await svc.post_notice_once(session.session_id, payload, dedupe_key="society_room_result:open-2")
+        event = await asyncio.wait_for(queue.get(), timeout=1)
+        assert event["kind"] == "notice"
+        assert event["payload"]["settle_event_id"] == "settle-2"
+        assert len([e for e in svc.store.list_events(session.session_id) if e["kind"] == "notice"]) == 1
+
+    asyncio.run(scenario())
+
+
 def test_post_notice_once_is_atomic_across_store_connections(tmp_path: Path) -> None:
     db = tmp_path / "chat.sqlite"
     first = AgentChatStore(db)
