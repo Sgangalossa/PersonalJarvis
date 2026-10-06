@@ -319,9 +319,52 @@ class SocietyRuntime:
         await self.coding_supervision.start()
         self._require_open_owner()
         self.background(self.recover_reviews())
+        self.background(self.recover_result_reports())
         self.background(self._migrate_legacy_mission_history())
         log.info("society runtime started (%s)", self.store.path)
         return self
+
+    async def recover_result_reports(self) -> None:
+        """Replay lead-result projections whose chat notice may have been interrupted.
+
+        RESULT is durable before the chat projection runs. A process crash in that
+        gap must not turn a completed assignment into a permanently silent one.
+        The chat projection is atomically deduped by request id, so replay is safe.
+        """
+        events = await self.store.events_since(0, limit=1000)
+        while len(events) == 1000:
+            tail = events[-1].seq
+            more = await self.store.events_since(tail, limit=1000)
+            if not more:
+                break
+            events.extend(more)
+        for result in events:
+            if result.msg_type is not MsgType.RESULT or not result.parent_event_id:
+                continue
+            request = next(
+                (
+                    item
+                    for item in events
+                    if item.event_id == result.parent_event_id
+                    and item.msg_type is MsgType.ASSIGN
+                ),
+                None,
+            )
+            if request is None or request.from_agent != LEAD_AGENT_ID:
+                continue
+            status = str(result.payload.get("status") or "done")
+            if not should_report(request, status):
+                continue
+            target = await self.roster.get(result.from_agent)
+            if target is None:
+                continue
+            summary = str(
+                result.payload.get("done")
+                or result.payload.get("text")
+                or result.payload.get("open")
+                or "turn finished"
+            ).strip()
+            await self.report_to_lead(target, request, status=status, summary=summary)
 
     async def _migrate_legacy_mission_history(self) -> None:
         """Import the retired agent board's durable mission rows off the boot path."""
