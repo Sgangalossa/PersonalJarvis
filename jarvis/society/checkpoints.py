@@ -362,12 +362,15 @@ class CheckpointEngine:
         svc = self._chat_service()
         if svc is None:
             return
-        # Subscribe before scheduling the watcher. ``note_turn_started`` is
-        # called from the turn's system-prompt builder, immediately before the
-        # runner starts emitting tool events. Creating the task first leaves a
-        # one-loop window in which the first tool_call can be published before
-        # the watcher has registered its queue.
-        queue = svc.subscribe(session_id)
+        # Subscribe before scheduling the watcher. The turn prompt is built
+        # immediately before the runner starts emitting tool events, so the
+        # subscription must exist before the watcher task is scheduled. Some
+        # lightweight surface test doubles expose only the running probe,
+        # therefore they remain valid no-op observers.
+        subscribe = getattr(svc, "subscribe", None)
+        if subscribe is None:
+            return
+        queue = subscribe(session_id)
         task = loop.create_task(self._watch_turn(agent_id, session_id, queue, svc))
         self._watchers[agent_id] = task
         task.add_done_callback(lambda t, a=agent_id, q=queue, service=svc: self._watcher_done(a, t, service, session_id, q))
