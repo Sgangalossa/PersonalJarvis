@@ -169,7 +169,7 @@ PRICING_USD_PER_MTOK: dict[str, tuple[float, float]] = {
     "grok-4.1-fast": (0.40, 1.60),
     "grok-3": (5.0, 15.0),
     # ── Z.ai GLM (Coding Plan / direct API) ───────────────────────────
-    # Z.ai list prices verified September 2026: GLM-5.3 $1.40/$4.40,
+    # Z.ai list prices (docs.z.ai pricing page, checked 2026-10-05): GLM-5.3 $1.40/$4.40,
     # GLM-5.3-Flash $0.15/$0.50, GLM-5.3-FlashX $0.37/$1.25,
     # GLM-5.2 $1.40/$4.40, GLM-4.7 $0.60/$2.20 and GLM-4.6 $0.60/$2.20.
     "glm-5.3": (1.40, 4.40),
