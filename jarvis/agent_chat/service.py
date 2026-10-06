@@ -440,13 +440,17 @@ class AgentChatService:
     async def post_notice_once(
         self, session_id: str, payload: dict[str, Any], *, dedupe_key: str
     ) -> bool:
-        """Persist a durable notice exactly once across runtime processes."""
-        return await asyncio.to_thread(
+        """Persist and publish a durable notice exactly once across processes."""
+        stored = await asyncio.to_thread(
             self.store.append_notice_once,
             session_id,
             payload,
             dedupe_key=dedupe_key,
         )
+        if stored is None:
+            return False
+        self._publish_event(session_id, stored)
+        return True
 
     async def _emit(self, session_id: str, event: dict[str, Any]) -> None:
         # One delivery path for every runner. Normalize only finished receipts;
