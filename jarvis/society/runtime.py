@@ -991,6 +991,23 @@ class SocietyRuntime:
                     session_id = sessions[0].session_id if sessions else ""
                 session = svc.store.get_session(session_id) if session_id else None
                 if session is not None and session.surface == "jarvis":
+                    # ROOM_SETTLE is durable on the Society board and may be
+                    # replayed after observer recovery. The projected notice
+                    # must therefore carry the exact terminal event id and
+                    # suppress a duplicate after a runtime restart.
+                    existing = getattr(svc.store, "list_events", None)
+                    if callable(existing):
+                        for prior in existing(session_id):
+                            prior_payload = prior.get("payload") if isinstance(prior, dict) else None
+                            if (
+                                isinstance(prior, dict)
+                                and prior.get("kind") == "notice"
+                                and isinstance(prior_payload, dict)
+                                and prior_payload.get("kind") == "society_room_result"
+                                and prior_payload.get("room_open_id") == opening.event_id
+                                and prior_payload.get("settle_event_id") == env.event_id
+                            ):
+                                return
                     await post(
                         session_id,
                         {
@@ -1002,6 +1019,7 @@ class SocietyRuntime:
                             "room_id": str(opening.payload.get("room_id") or ""),
                             "trace_id": opening.trace_id,
                             "room_open_id": opening.event_id,
+                            "settle_event_id": env.event_id,
                             "report": announcement.report,
                         },
                     )
