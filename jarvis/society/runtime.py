@@ -1008,6 +1008,20 @@ class SocietyRuntime:
                         "settle_event_id": env.event_id,
                         "report": announcement.report,
                     }
+                    existing = getattr(svc.store, "list_events", None)
+                    if callable(existing):
+                        for prior in existing(session_id):
+                            prior_payload = (
+                                prior.get("payload") if isinstance(prior, dict) else None
+                            )
+                            if (
+                                isinstance(prior, dict)
+                                and prior.get("kind") == "notice"
+                                and isinstance(prior_payload, dict)
+                                and prior_payload.get("kind") == "society_room_result"
+                                and prior_payload.get("room_open_id") == opening.event_id
+                            ):
+                                return
                     post_once = getattr(svc, "post_notice_once", None)
                     if callable(post_once):
                         created = await post_once(
@@ -1018,20 +1032,6 @@ class SocietyRuntime:
                         if not created:
                             return
                     else:
-                        existing = getattr(svc.store, "list_events", None)
-                        if callable(existing):
-                            for prior in existing(session_id):
-                                prior_payload = (
-                                    prior.get("payload") if isinstance(prior, dict) else None
-                                )
-                                if (
-                                    isinstance(prior, dict)
-                                    and prior.get("kind") == "notice"
-                                    and isinstance(prior_payload, dict)
-                                    and prior_payload.get("kind") == "society_room_result"
-                                    and prior_payload.get("room_open_id") == opening.event_id
-                                ):
-                                    return
                         await post(session_id, notice_payload)
             except Exception:  # A chat notice failure must not suppress the voice result.
                 log.warning("society: room result notice delivery failed", exc_info=True)
