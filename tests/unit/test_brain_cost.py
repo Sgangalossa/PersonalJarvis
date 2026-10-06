@@ -183,6 +183,8 @@ def test_zai_glm_rates_do_not_inherit_anthropic_pricing() -> None:
     from jarvis.brain.cost import calculate_cost_usd
 
     assert calculate_cost_usd("glm-4.6", 1_000_000, 1_000_000) == pytest.approx(2.80)
+    assert calculate_cost_usd("glm-5.1", 1_000_000, 1_000_000) == pytest.approx(5.80)
+    assert calculate_cost_usd("glm-4.5", 1_000_000, 1_000_000) == pytest.approx(2.80)
     assert calculate_cost_usd("claude-opus-4-8", 1_000_000, 1_000_000) == pytest.approx(90.0)
 
 
