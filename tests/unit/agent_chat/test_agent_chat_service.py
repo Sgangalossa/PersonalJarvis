@@ -234,7 +234,7 @@ def test_post_notice_once_is_atomic_across_store_connections(tmp_path: Path) -> 
                 dedupe_key="society_room_result:open-1",
             ),
         )
-        assert sorted(results) == [False, True]
+        assert sum(result is not None for result in results) == 1
         notices = [e for e in first.list_events(session.session_id) if e["kind"] == "notice"]
         assert len(notices) == 1
         assert notices[0]["payload"] == payload | {"_dedupe_key": "society_room_result:open-1"}
