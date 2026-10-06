@@ -286,8 +286,7 @@ async def test_lead_message_dedupes_each_response_event_not_request() -> None:
         to_agent="scout",
         trace_id="trace-messages",
         event_id="request-1",
-        payload={"reply_session_id": "jarvis-session"},
-        text="What is the release status?",
+        payload={"reply_session_id": "jarvis-session", "text": "What is the release status?"},
     )
     query = SocietyEnvelope(
         msg_type=MsgType.QUERY,
@@ -296,8 +295,7 @@ async def test_lead_message_dedupes_each_response_event_not_request() -> None:
         trace_id="trace-messages",
         parent_event_id="request-1",
         event_id="query-1",
-        payload={},
-        text="I need one detail.",
+        payload={"text": "I need one detail."},
     )
     answer = SocietyEnvelope(
         msg_type=MsgType.ANSWER,
@@ -306,8 +304,7 @@ async def test_lead_message_dedupes_each_response_event_not_request() -> None:
         trace_id="trace-messages",
         parent_event_id="request-1",
         event_id="answer-1",
-        payload={"reply_status": "done"},
-        text="The release is ready.",
+        payload={"reply_status": "done", "text": "The release is ready."},
     )
 
     class _Store:
