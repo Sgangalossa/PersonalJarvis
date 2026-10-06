@@ -738,3 +738,33 @@ def test_allow_always_on_a_kit_that_handles_it_does_not_flip_the_mode(
         assert remembered == [(session.session_id, "RunCommand", {"command": "echo x"})]
 
     asyncio.run(scenario())
+
+
+async def test_receive_message_dedupes_concurrent_delivery_and_publishes_once():
+    store = AgentChatStore(":memory:")
+    svc = AgentChatService(store, assistant_name=lambda: "Test")
+    session = svc.create_session(provider="fakeprov")
+    q = svc.subscribe(session.session_id)
+    from jarvis.society.delivery import IncomingMessage
+
+    incoming = IncomingMessage(
+        message_id="society-event-1",
+        sender_id="scout",
+        sender_name="Scout",
+        sender_kind="agent",
+        text="ping",
+        prompt="[say from Scout] ping",
+        trace_id="trace-1",
+    )
+    results = await asyncio.gather(
+        svc.receive_message(session.session_id, incoming),
+        svc.receive_message(session.session_id, incoming),
+    )
+    assert results[0]["message_id"] == results[1]["message_id"] == incoming.message_id
+    events = [store_event for store_event in store.list_events(session.session_id)]
+    assert [event["kind"] for event in events] == ["agent_message"]
+    published = [q.get_nowait(),]
+    assert published[0]["kind"] == "agent_message"
+    with pytest.raises(asyncio.QueueEmpty):
+        q.get_nowait()
+
