@@ -101,6 +101,9 @@ async def test_room_settlement_projects_exact_open_receipt_and_trace(monkeypatch
     notices: list[tuple[str, dict[str, object]]] = []
 
     class _Store:
+        def __init__(self) -> None:
+            self.notice_events: list[dict[str, object]] = []
+
         async def events_for_trace(self, trace_id: str):
             return [
                 SimpleNamespace(
@@ -133,14 +136,20 @@ async def test_room_settlement_projects_exact_open_receipt_and_trace(monkeypatch
         def list_sessions(self, *, limit: int, surface: str):
             return []
 
+        def list_events(self, session_id: str):
+            return list(self.notice_events)
+
         def get_session(self, session_id: str):
             return SimpleNamespace(session_id=session_id, surface="jarvis")
 
+    chat_store = _Store()
+
     class _Chat:
-        store = _Store()
+        store = chat_store
 
         async def post_notice(self, session_id: str, payload: dict[str, object]) -> None:
             notices.append((session_id, payload))
+            chat_store.notice_events.append({"kind": "notice", "payload": dict(payload)})
 
     def runtime_msg_type(name: str):
         from jarvis.society.events import MsgType
@@ -164,15 +173,17 @@ async def test_room_settlement_projects_exact_open_receipt_and_trace(monkeypatch
 
     from jarvis.society.events import MsgType, SocietyEnvelope
 
-    await runtime._room_settled(
-        SocietyEnvelope(
-            msg_type=MsgType.ROOM_SETTLE,
-            from_agent="scheduler",
-            to_agent=None,
-            trace_id="room-trace-42",
-            payload={"room_id": "room-42", "reason": "round_cap"},
-        )
+    settlement = SocietyEnvelope(
+        msg_type=MsgType.ROOM_SETTLE,
+        from_agent="scheduler",
+        to_agent=None,
+        trace_id="room-trace-42",
+        event_id="room-settle-42",
+        payload={"room_id": "room-42", "reason": "round_cap"},
     )
+    await runtime._room_settled(settlement)
+    # Simulate observer/runtime restart replaying the exact durable terminal event.
+    await runtime._room_settled(settlement)
 
     assert len(notices) == 1
     session_id, payload = notices[0]
@@ -181,5 +192,6 @@ async def test_room_settlement_projects_exact_open_receipt_and_trace(monkeypatch
     assert payload["room_id"] == "room-42"
     assert payload["trace_id"] == "room-trace-42"
     assert payload["room_open_id"] == "room-open-42"
+    assert payload["settle_event_id"] == settlement.event_id
     assert payload["agent_ids"] == ["scout", "archivist"]
     assert "Scout: The release is ready." in payload["report"]
