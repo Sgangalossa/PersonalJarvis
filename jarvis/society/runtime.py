@@ -1030,7 +1030,10 @@ class SocietyRuntime:
                             dedupe_key=f"society_room_result:{opening.event_id}",
                         )
                         if not created:
-                            return
+                            log.debug(
+                                "society: room result notice already persisted for %s",
+                                opening.event_id,
+                            )
                     else:
                         await post(session_id, notice_payload)
             except Exception:  # A chat notice failure must not suppress the voice result.
