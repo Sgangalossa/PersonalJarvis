@@ -67,6 +67,10 @@ async def _run_nonstreaming_turn(response: str, language: str) -> list[str]:
     pipe._streaming_enabled = lambda: False  # type: ignore[method-assign]
     pipe._output_language = lambda *_a, **_kw: language  # type: ignore[method-assign]
     pipe._brain = SimpleNamespace(reply_language=language, conversation_language=language)
+    # This suite isolates the residue verdict. Instant/contextual ACKs are a
+    # separate voice contract and would add a preamble to the TTS capture.
+    pipe._instant_ack_enabled = lambda: False  # type: ignore[method-assign]
+    pipe._ack_brain = None
 
     async def _transcribe(_pcm: bytes) -> Transcript:
         # i18n-allow: spoken German user prompt in the test
