@@ -1052,7 +1052,8 @@ class SocietyRuntime:
         )
         svc = self._get_chat()
         post = getattr(svc, "post_notice", None)
-        if post is not None:
+        post_once = getattr(svc, "post_notice_once", None)
+        if post is not None or callable(post_once):
             try:
                 session_id = str(opening.payload.get("reply_session_id") or "")
                 if not session_id:
@@ -1090,7 +1091,6 @@ class SocietyRuntime:
                                 and prior_payload.get("room_open_id") == opening.event_id
                             ):
                                 return
-                    post_once = getattr(svc, "post_notice_once", None)
                     if callable(post_once):
                         created = await post_once(
                             session_id,
