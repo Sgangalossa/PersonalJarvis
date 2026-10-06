@@ -251,7 +251,7 @@ async def test_a_typed_turn_walks_to_the_docks_and_back(rt: SocietyRuntime):
 
 
 async def test_turn_watcher_survives_rapid_turn_restart(rt: SocietyRuntime):
-    """A replacement turn must not inherit a stale watcher shutdown."""
+    """A replacement turn must not inherit a stale family window."""
     svc = FakeChatService()
     rt._get_chat = lambda: svc
     pushed: list = []
@@ -259,7 +259,8 @@ async def test_turn_watcher_survives_rapid_turn_restart(rt: SocietyRuntime):
     session = "society:scout"
     svc.running.add(session)
     rt.checkpoints.note_turn_started("scout", session)
-    svc.emit(session, "tool_call", name="google_drive")
+    for _ in range(8):
+        svc.emit(session, "tool_call", name="google_drive")
     await _wait_for_checkpoint(rt, Checkpoint.HUB_PLUGINS, pushed)
 
     # The runner can finish one turn and start the next before the watcher
