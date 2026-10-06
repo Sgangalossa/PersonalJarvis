@@ -996,38 +996,43 @@ class SocietyRuntime:
                     # replayed after observer recovery. The projected notice
                     # must therefore carry the exact terminal event id and
                     # suppress a duplicate after a runtime restart.
-                    existing = getattr(svc.store, "list_events", None)
-                    if callable(existing):
-                        for prior in existing(session_id):
-                            prior_payload = (
-                                prior.get("payload") if isinstance(prior, dict) else None
-                            )
-                            if (
-                                isinstance(prior, dict)
-                                and prior.get("kind") == "notice"
-                                and isinstance(prior_payload, dict)
-                                and prior_payload.get("kind") == "society_room_result"
-                                # A room has one durable terminal edge. Matching
-                                # its exact open receipt also covers notices
-                                # written before settle_event_id was added.
-                                and prior_payload.get("room_open_id") == opening.event_id
-                            ):
-                                return
-                    await post(
-                        session_id,
-                        {
-                            "kind": "society_room_result",
-                            "agent_ids": member_ids,
-                            "agent_names": [names.get(item, item) for item in member_ids],
-                            "status": status,
-                            "text": report[:1000],
-                            "room_id": str(opening.payload.get("room_id") or ""),
-                            "trace_id": opening.trace_id,
-                            "room_open_id": opening.event_id,
-                            "settle_event_id": env.event_id,
-                            "report": announcement.report,
-                        },
-                    )
+                    notice_payload = {
+                        "kind": "society_room_result",
+                        "agent_ids": member_ids,
+                        "agent_names": [names.get(item, item) for item in member_ids],
+                        "status": status,
+                        "text": report[:1000],
+                        "room_id": str(opening.payload.get("room_id") or ""),
+                        "trace_id": opening.trace_id,
+                        "room_open_id": opening.event_id,
+                        "settle_event_id": env.event_id,
+                        "report": announcement.report,
+                    }
+                    post_once = getattr(svc, "post_notice_once", None)
+                    if callable(post_once):
+                        created = await post_once(
+                            session_id,
+                            notice_payload,
+                            dedupe_key=f"society_room_result:{opening.event_id}",
+                        )
+                        if not created:
+                            return
+                    else:
+                        existing = getattr(svc.store, "list_events", None)
+                        if callable(existing):
+                            for prior in existing(session_id):
+                                prior_payload = (
+                                    prior.get("payload") if isinstance(prior, dict) else None
+                                )
+                                if (
+                                    isinstance(prior, dict)
+                                    and prior.get("kind") == "notice"
+                                    and isinstance(prior_payload, dict)
+                                    and prior_payload.get("kind") == "society_room_result"
+                                    and prior_payload.get("room_open_id") == opening.event_id
+                                ):
+                                    return
+                        await post(session_id, notice_payload)
             except Exception:  # A chat notice failure must not suppress the voice result.
                 log.warning("society: room result notice delivery failed", exc_info=True)
         await self.publish_attention(
