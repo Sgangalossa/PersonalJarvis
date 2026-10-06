@@ -1090,7 +1090,7 @@ class SocietyRuntime:
                                 and prior_payload.get("kind") == "society_room_result"
                                 and prior_payload.get("room_open_id") == opening.event_id
                             ):
-                                return
+                                break
                     if callable(post_once):
                         created = await post_once(
                             session_id,
