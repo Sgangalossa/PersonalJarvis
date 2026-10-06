@@ -472,7 +472,13 @@ class AgentChatStore:
             except Exception:
                 self._conn.rollback()
                 raise
-        return True
+        return {
+            "kind": "notice",
+            "payload": stored,
+            "seq": seq,
+            "ts_ms": ts_ms,
+        }
+
     def incoming_message(self, session_id: str, message_id: str) -> dict[str, Any] | None:
         """Fold a receipt and its status updates; old user messages stay untouched."""
         receipt = None
