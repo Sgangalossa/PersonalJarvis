@@ -103,4 +103,6 @@ Native macOS qualification remains separate and requires physical Accessibility/
 
 - Finite event routines now let `TaskRunner` own the final running-to-completed transition. The scheduler removes the exhausted rule from its indexes without completing it before the runner can claim it, preserving the last firing across hydration; the focused calendar-routine contract passes with Ruff clean.
 
-- Durable busy-chat receipt projection now marks successfully persisted same-recipient receipts delivered, preventing recovery drains from replaying them behind an older busy turn. A focused scheduler regression keeps the original busy event queued, settles the projected receipt and proves a later drain does not duplicate it. CI qualification is pending.
+- CI #445 exposed a real durable-delivery regression in the busy-chat receipt change: a projected receipt was marked delivered before it owned a turn, so the recovery drain could never resume that message. Projection now remains idempotently queued until the scheduler can deliver its turn. The focused scheduler lifecycle and end-to-end FIFO receipt contracts pass locally on Linux; full CI qualification is pending.
+
+Next remote-safe task: finish the durable handoff audit at room RESULT projection boundaries, preserving the exact event ID, retry state and owner accounting across restart. Native Mac qualification remains blocked on physical Accessibility and input permissions.

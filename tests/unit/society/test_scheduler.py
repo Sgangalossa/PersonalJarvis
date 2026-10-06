@@ -786,13 +786,18 @@ async def test_busy_delivery_stays_queued_and_is_logged(tmp_path: Path, caplog):
         await store.close()
 
 
-async def test_projected_receipt_is_settled_and_not_replayed(tmp_path: Path):
+async def test_projected_receipt_stays_queued_until_its_turn(tmp_path: Path):
     class BusyWithReceiptProjection:
         def __init__(self) -> None:
             self.received: list[str] = []
+            self.delivered: list[str] = []
+            self.busy = True
 
         async def __call__(self, target: AgentRecord, env: SocietyEnvelope) -> None:
-            raise DeliveryBusy("canonical chat is busy")
+            if self.busy:
+                raise DeliveryBusy("canonical chat is busy")
+            self.delivered.append(env.event_id)
+            self.busy = True
 
         async def receive(self, target: AgentRecord, env: SocietyEnvelope) -> None:
             self.received.append(env.event_id)
@@ -823,11 +828,21 @@ async def test_projected_receipt_is_settled_and_not_replayed(tmp_path: Path):
         )
 
         assert await store.delivery_status(first.event_id) == "queued"
-        assert await store.delivery_status(second.event_id) == "delivered"
+        assert await store.delivery_status(second.event_id) == "queued"
         assert deliverer.received == [second.event_id]
 
+        deliverer.busy = False
         await scheduler.drain_deliveries()
         assert deliverer.received == [second.event_id]
+        assert deliverer.delivered == [first.event_id]
+        assert await store.delivery_status(first.event_id) == "delivered"
+        assert await store.delivery_status(second.event_id) == "queued"
+
+        deliverer.busy = False
+        await scheduler.drain_deliveries()
+        assert deliverer.received == [second.event_id]
+        assert deliverer.delivered == [first.event_id, second.event_id]
+        assert await store.delivery_status(second.event_id) == "delivered"
     finally:
         scheduler.detach()
         await store.close()
