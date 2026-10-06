@@ -763,6 +763,10 @@ async def test_receive_message_dedupes_concurrent_delivery_and_publishes_once():
     assert results[0]["message_id"] == results[1]["message_id"] == incoming.message_id
     events = [store_event for store_event in store.list_events(session.session_id)]
     assert [event["kind"] for event in events] == ["agent_message"]
+    persisted = store.get_session(session.session_id)
+    assert persisted is not None
+    assert persisted.message_count == 1
+    assert persisted.preview == "ping"
     published = [q.get_nowait(),]
     assert published[0]["kind"] == "agent_message"
     with pytest.raises(asyncio.QueueEmpty):
