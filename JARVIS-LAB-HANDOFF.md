@@ -191,3 +191,13 @@ Continuously improve JARVIS LAB toward a stable, modular, verified system by ide
 On first contact with this repository, do not reply with only a plan.
 
 Read this file, inspect the real state of `jarvis-lab`, PR #1, HEAD, recent commits, and CI, then continue from the highest-priority useful non-blocked task.
+
+## Front-page Command Center HUD
+
+The primary voice surface is intentionally treated as a command console rather than a generic chatbot landing page. The visual language is inspired by cinematic futuristic assistant interfaces, including the restrained technical overlays associated with the Iron Man/JARVIS concept, but is implemented as an original design system rather than a screen recreation.
+
+- central reactive reactor communicates idle/listening/thinking/speaking/error
+- side telemetry rails expose voice link, core, security, network and wake-word state
+- technical grid, rings and hairlines use the existing theme tokens and respect reduced-motion
+- mobile collapses telemetry into the central control instead of creating a cramped dashboard
+- the existing JarvisBar remains the primary voice interaction control
