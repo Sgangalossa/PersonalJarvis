@@ -102,3 +102,5 @@ Native macOS qualification remains separate and requires physical Accessibility/
 - CI #438 also exposed duplicate `AudioOutFirst` receipts across sentence-level `play_chunks()` calls sharing one persistent output stream. The receipt flag now follows the native stream lifetime and resets only when a replacement stream opens; the focused persistent-stream regression passes with Ruff clean.
 
 - Finite event routines now let `TaskRunner` own the final running-to-completed transition. The scheduler removes the exhausted rule from its indexes without completing it before the runner can claim it, preserving the last firing across hydration; the focused calendar-routine contract passes with Ruff clean.
+
+- Durable busy-chat receipt projection now marks successfully persisted same-recipient receipts delivered, preventing recovery drains from replaying them behind an older busy turn. A focused scheduler regression keeps the original busy event queued, settles the projected receipt and proves a later drain does not duplicate it. CI qualification is pending.
