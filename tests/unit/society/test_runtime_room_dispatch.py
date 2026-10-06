@@ -205,3 +205,71 @@ async def test_room_settlement_projects_exact_open_receipt_and_trace(monkeypatch
     assert payload["settle_event_id"] == settlement.event_id
     assert payload["agent_ids"] == ["scout", "archivist"]
     assert "Scout: The release is ready." in payload["report"]
+
+
+@pytest.mark.asyncio
+async def test_result_recovery_replays_missing_notice_without_duplicates(monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime = SocietyRuntime.__new__(SocietyRuntime)
+    from jarvis.society.events import MsgType, SocietyEnvelope
+
+    request = SocietyEnvelope(
+        msg_type=MsgType.ASSIGN,
+        from_agent="jarvis",
+        to_agent="scout",
+        trace_id="trace-recover",
+        event_id="assign-1",
+        payload={"text": "Check the release.", "reply_policy": "always"},
+    )
+    result = SocietyEnvelope(
+        msg_type=MsgType.RESULT,
+        from_agent="scout",
+        to_agent="jarvis",
+        trace_id="trace-recover",
+        parent_event_id="assign-1",
+        event_id="result-1",
+        payload={"run_id": "run-1", "status": "done", "done": "Release checked.", "output": ["report"]},
+    )
+
+    class _Store:
+        async def events_since(self, seq: int, *, limit: int):
+            return [request, result] if seq == 0 else []
+
+    class _ChatStore:
+        def get_session(self, session_id: str):
+            return SimpleNamespace(session_id=session_id, surface="jarvis")
+
+        def list_sessions(self, *, limit: int, surface: str):
+            return [SimpleNamespace(session_id="jarvis-session")]
+
+    class _Chat:
+        def __init__(self) -> None:
+            self.store = _ChatStore()
+            self.notices: list[dict[str, object]] = []
+
+        async def post_notice_once(self, session_id: str, payload: dict[str, object], *, dedupe_key: str) -> bool:
+            if any(item["dedupe_key"] == dedupe_key for item in self.notices):
+                return False
+            self.notices.append({"session_id": session_id, "payload": payload, "dedupe_key": dedupe_key})
+            return True
+
+    chat = _Chat()
+    runtime.store = _Store()
+    runtime.roster = SimpleNamespace(get=lambda agent_id: _agent(agent_id))
+    runtime._get_chat = lambda: chat
+    runtime._publish_event = None
+    attention_calls: list[dict[str, object]] = []
+
+    async def _attention(**kwargs):
+        attention_calls.append(kwargs)
+
+    monkeypatch.setattr(runtime, "publish_attention", _attention)
+
+    async def _agent(agent_id: str):
+        return SimpleNamespace(agent_id=agent_id, name="Scout", session_id="society:scout")
+
+    await runtime.recover_result_reports()
+    await runtime.recover_result_reports()
+
+    assert len(chat.notices) == 1
+    assert chat.notices[0]["dedupe_key"] == "society_result:assign-1"
+    assert len(attention_calls) == 2
