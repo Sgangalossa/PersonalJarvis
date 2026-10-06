@@ -359,7 +359,16 @@ class CheckpointEngine:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        task = loop.create_task(self._watch_turn(agent_id, session_id))
+        svc = self._chat_service()
+        if svc is None:
+            return
+        # Subscribe before scheduling the watcher. ``note_turn_started`` is
+        # called from the turn's system-prompt builder, immediately before the
+        # runner starts emitting tool events. Creating the task first leaves a
+        # one-loop window in which the first tool_call can be published before
+        # the watcher has registered its queue.
+        queue = svc.subscribe(session_id)
+        task = loop.create_task(self._watch_turn(agent_id, session_id, queue))
         self._watchers[agent_id] = task
         task.add_done_callback(lambda t, a=agent_id: self._watcher_done(a, t))
 
@@ -408,11 +417,12 @@ class CheckpointEngine:
 
     # -------------------------------------------------------- turn watcher
 
-    async def _watch_turn(self, agent_id: str, session_id: str) -> None:
+    async def _watch_turn(
+        self, agent_id: str, session_id: str, queue: asyncio.Queue[dict[str, Any]]
+    ) -> None:
         svc = self._chat_service()
         if svc is None:
             return
-        queue = svc.subscribe(session_id)
         try:
             agent = await self._runtime.roster.get(agent_id)
             cli_seat = agent is not None and self._cli_seat(agent)
