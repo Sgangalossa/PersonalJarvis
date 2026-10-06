@@ -468,7 +468,8 @@ class SocietyRuntime:
         )
         svc = self._get_chat()
         post = getattr(svc, "post_notice", None)
-        if post is not None:
+        post_once = getattr(svc, "post_notice_once", None)
+        if post is not None or post_once is not None:
             try:
                 session_id = str(request.payload.get("reply_session_id") or "")
                 if not session_id:
@@ -477,12 +478,20 @@ class SocietyRuntime:
                 # Never redirect a result from a deleted chat into an unrelated one.
                 session = svc.store.get_session(session_id) if session_id else None
                 if session is not None and session.surface == "jarvis":
-                    await post(session_id, {
+                    payload = {
                         "kind": kind, "agent_id": target.agent_id, "agent_name": target.name,
                         "msg_type": message_type, "status": status, "text": summary[:1000],
                         "session_id": target.session_id, "trace_id": request.trace_id,
                         "assignment_id": request.event_id, "report": event.report,
-                    })
+                    }
+                    if post_once is not None:
+                        await post_once(
+                            session_id,
+                            payload,
+                            dedupe_key=f"{kind}:{request.event_id}",
+                        )
+                    else:
+                        await post(session_id, payload)
             except Exception:  # A chat failure must not suppress the voice result.
                 log.warning("society: result notice delivery failed", exc_info=True)
         if kind == "society_result":
