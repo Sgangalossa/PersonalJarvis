@@ -273,3 +273,73 @@ async def test_result_recovery_replays_missing_notice_without_duplicates(monkeyp
     assert len(chat.notices) == 1
     assert chat.notices[0]["dedupe_key"] == "society_result:assign-1"
     assert len(attention_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_lead_message_dedupes_each_response_event_not_request() -> None:
+    runtime = SocietyRuntime.__new__(SocietyRuntime)
+    from jarvis.society.events import MsgType, SocietyEnvelope
+
+    request = SocietyEnvelope(
+        msg_type=MsgType.QUERY,
+        from_agent="jarvis",
+        to_agent="scout",
+        trace_id="trace-messages",
+        event_id="request-1",
+        payload={"reply_session_id": "jarvis-session"},
+        text="What is the release status?",
+    )
+    query = SocietyEnvelope(
+        msg_type=MsgType.QUERY,
+        from_agent="scout",
+        to_agent="jarvis",
+        trace_id="trace-messages",
+        parent_event_id="request-1",
+        event_id="query-1",
+        payload={},
+        text="I need one detail.",
+    )
+    answer = SocietyEnvelope(
+        msg_type=MsgType.ANSWER,
+        from_agent="scout",
+        to_agent="jarvis",
+        trace_id="trace-messages",
+        parent_event_id="request-1",
+        event_id="answer-1",
+        payload={"reply_status": "done"},
+        text="The release is ready.",
+    )
+
+    class _Store:
+        def get_session(self, session_id: str):
+            return SimpleNamespace(session_id=session_id, surface="jarvis")
+
+        def list_sessions(self, *, limit: int, surface: str):
+            return [SimpleNamespace(session_id="jarvis-session")]
+
+    class _Chat:
+        def __init__(self) -> None:
+            self.store = _Store()
+            self.notices: list[dict[str, object]] = []
+
+        async def post_notice_once(
+            self, session_id: str, payload: dict[str, object], *, dedupe_key: str
+        ) -> bool:
+            if any(item["dedupe_key"] == dedupe_key for item in self.notices):
+                return False
+            self.notices.append(
+                {"session_id": session_id, "payload": payload, "dedupe_key": dedupe_key}
+            )
+            return True
+
+    chat = _Chat()
+    runtime._get_chat = lambda: chat
+    sender = SimpleNamespace(agent_id="scout", name="Scout")
+
+    await runtime.announce_lead_message(sender, query, request=request)
+    await runtime.announce_lead_message(sender, answer, request=request)
+
+    assert [item["dedupe_key"] for item in chat.notices] == [
+        "society_message:query-1",
+        "society_message:answer-1",
+    ]
