@@ -212,7 +212,7 @@ def test_provider_error_is_reported_not_raised(tmp_path: Path, monkeypatch: pyte
     asyncio.run(scenario())
 
 
-def test_post_notice_once_publishes_the_single_persisted_event(tmp_path: Path) -> None:
+def test_post_notice_once_publishes_the_single_persisted_event(tmp_path: Path, scripted) -> None:
     async def scenario() -> None:
         svc = AgentChatService(AgentChatStore(":memory:"))
         session = svc.create_session(provider="fakeprov", cwd=str(tmp_path), surface="jarvis")
@@ -232,7 +232,7 @@ def test_post_notice_once_publishes_the_single_persisted_event(tmp_path: Path) -
 def test_post_notice_once_is_atomic_across_store_connections(tmp_path: Path) -> None:
     db = tmp_path / "chat.sqlite"
     first = AgentChatStore(db)
-    session = first.create_session(provider="fakeprov", cwd=str(tmp_path), surface="jarvis")
+    session = first.create_session(provider="fakeprov", model="", effort=None, cwd=str(tmp_path), surface="jarvis")
     second = AgentChatStore(db)
     payload = {"kind": "society_room_result", "room_open_id": "open-1", "settle_event_id": "settle-1"}
 
