@@ -740,6 +740,39 @@ def test_allow_always_on_a_kit_that_handles_it_does_not_flip_the_mode(
     asyncio.run(scenario())
 
 
+async def test_receive_message_dedupes_across_store_connections(tmp_path):
+    db = tmp_path / "chat.db"
+    first = AgentChatStore(db)
+    second = AgentChatStore(db)
+    svc_a = AgentChatService(first, assistant_name=lambda: "Test")
+    svc_b = AgentChatService(second, assistant_name=lambda: "Test")
+    session = svc_a.create_session(provider="fakeprov")
+    q = svc_a.subscribe(session.session_id)
+    from jarvis.society.delivery import IncomingMessage
+
+    incoming = IncomingMessage(
+        message_id="society-cross-connection-1",
+        sender_id="scout",
+        sender_name="Scout",
+        sender_kind="agent",
+        text="ping",
+        prompt="[say from Scout] ping",
+        trace_id="trace-cross-1",
+    )
+    results = await asyncio.gather(
+        svc_a.receive_message(session.session_id, incoming),
+        svc_b.receive_message(session.session_id, incoming),
+    )
+    assert results[0]["message_id"] == results[1]["message_id"] == incoming.message_id
+    events = first.list_events(session.session_id)
+    assert [event["kind"] for event in events] == ["agent_message"]
+    assert first.get_session(session.session_id).message_count == 1  # type: ignore[union-attr]
+    assert q.qsize() == 1
+    assert q.get_nowait()["payload"]["message_id"] == incoming.message_id
+    with pytest.raises(asyncio.QueueEmpty):
+        q.get_nowait()
+
+
 async def test_receive_message_dedupes_concurrent_delivery_and_publishes_once():
     store = AgentChatStore(":memory:")
     svc = AgentChatService(store, assistant_name=lambda: "Test")
