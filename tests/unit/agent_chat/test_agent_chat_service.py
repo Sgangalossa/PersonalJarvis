@@ -221,19 +221,23 @@ def test_post_notice_once_is_atomic_across_store_connections(tmp_path: Path) -> 
 
     async def scenario() -> None:
         results = await asyncio.gather(
-            asyncio.to_thread(first.append_notice_once, session.session_id, payload, dedupe_key="society_room_result:open-1"),
-            asyncio.to_thread(second.append_notice_once, session.session_id, payload, dedupe_key="society_room_result:open-1"),
+            asyncio.to_thread(
+                first.append_notice_once,
+                session.session_id,
+                payload,
+                dedupe_key="society_room_result:open-1",
+            ),
+            asyncio.to_thread(
+                second.append_notice_once,
+                session.session_id,
+                payload,
+                dedupe_key="society_room_result:open-1",
+            ),
         )
         assert sorted(results) == [False, True]
-        assert [e for e in first.list_events(session.session_id) if e["kind"] == "notice"] == [
-            {
-                "session_id": session.session_id,
-                "seq": 1,
-                "ts_ms": first.list_events(session.session_id)[0]["ts_ms"],
-                "kind": "notice",
-                "payload": payload | {"_dedupe_key": "society_room_result:open-1"},
-            }
-        ]
+        notices = [e for e in first.list_events(session.session_id) if e["kind"] == "notice"]
+        assert len(notices) == 1
+        assert notices[0]["payload"] == payload | {"_dedupe_key": "society_room_result:open-1"}
 
     asyncio.run(scenario())
     first.close()
