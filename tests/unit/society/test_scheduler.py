@@ -786,6 +786,53 @@ async def test_busy_delivery_stays_queued_and_is_logged(tmp_path: Path, caplog):
         await store.close()
 
 
+async def test_projected_receipt_is_settled_and_not_replayed(tmp_path: Path):
+    class BusyWithReceiptProjection:
+        def __init__(self) -> None:
+            self.received: list[str] = []
+
+        async def __call__(self, target: AgentRecord, env: SocietyEnvelope) -> None:
+            raise DeliveryBusy("canonical chat is busy")
+
+        async def receive(self, target: AgentRecord, env: SocietyEnvelope) -> None:
+            self.received.append(env.event_id)
+
+    store = SocietyStore(tmp_path / "projected-receipt.db")
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Scout")
+    await roster.create(name="Archivist")
+    deliverer = BusyWithReceiptProjection()
+    scheduler = SocietyScheduler(store, roster, deliver=deliverer).attach()
+    try:
+        first = await store.append_and_publish(
+            SocietyEnvelope(
+                msg_type=MsgType.SAY,
+                from_agent="scout",
+                to_agent="archivist",
+                trace_id="busy-receipts",
+            )
+        )
+        second = await store.append_and_publish(
+            SocietyEnvelope(
+                msg_type=MsgType.SAY,
+                from_agent="scout",
+                to_agent="archivist",
+                trace_id="busy-receipts",
+            )
+        )
+
+        assert await store.delivery_status(first.event_id) == "queued"
+        assert await store.delivery_status(second.event_id) == "delivered"
+        assert deliverer.received == [second.event_id]
+
+        await scheduler.drain_deliveries()
+        assert deliverer.received == [second.event_id]
+    finally:
+        scheduler.detach()
+        await store.close()
+
+
 async def test_trace_message_cap(tmp_path: Path):
     store = SocietyStore(tmp_path / "c.db")
     await store.open()
