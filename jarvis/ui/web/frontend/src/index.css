@@ -3115,3 +3115,83 @@ body {
   .jarvis-reactor-ring,
   .jarvis-reactor-core { animation: none !important; }
 }
+
+
+.jarvis-home-header {
+  display: flex;
+  min-height: 56px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 10px 24px;
+  border-bottom: 1px solid rgb(var(--accent-rgb) / 0.1);
+  background: rgb(var(--background-rgb) / 0.68);
+  backdrop-filter: blur(16px);
+}
+.jarvis-home-brand {
+  display: flex;
+  min-width: 190px;
+  align-items: center;
+  gap: 10px;
+}
+.jarvis-home-brand strong {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--font-display, Inter, sans-serif);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.jarvis-home-brand-mark {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  gap: 2px;
+  border: 1px solid rgb(var(--accent-rgb) / 0.4);
+  border-radius: 50%;
+}
+.jarvis-home-brand-mark span {
+  display: block;
+  width: 7px;
+  height: 1px;
+  background: hsl(var(--accent));
+}
+.jarvis-home-brand-mark span:nth-child(1) { transform: rotate(90deg) translateX(3px); }
+.jarvis-home-brand-mark span:nth-child(2) { width: 10px; }
+.jarvis-home-brand-mark span:nth-child(3) { transform: rotate(90deg) translateX(-3px); }
+.jarvis-home-header-center {
+  display: flex;
+  min-width: 180px;
+  align-items: center;
+  gap: 8px;
+  color: hsl(var(--muted-foreground));
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 8px;
+  letter-spacing: 0.2em;
+}
+.jarvis-home-header-center span:first-child,
+.jarvis-home-header-center span:last-child {
+  height: 1px;
+  flex: 1;
+  background: linear-gradient(90deg, transparent, rgb(var(--accent-rgb) / 0.2));
+}
+.jarvis-home-header-center span:last-child {
+  background: linear-gradient(90deg, rgb(var(--accent-rgb) / 0.2), transparent);
+}
+.jarvis-home-link-state {
+  display: flex;
+  min-width: 190px;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 7px;
+  color: hsl(var(--muted-foreground));
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 8px;
+  letter-spacing: 0.14em;
+}
+@media (max-width: 700px) {
+  .jarvis-home-header { padding-inline: 16px; }
+  .jarvis-home-header-center { display: none; }
+  .jarvis-home-brand, .jarvis-home-link-state { min-width: 0; }
+}
