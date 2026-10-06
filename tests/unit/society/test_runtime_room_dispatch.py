@@ -99,6 +99,7 @@ async def test_room_dispatch_forces_read_only_chat_turn(monkeypatch: pytest.Monk
 async def test_room_settlement_projects_exact_open_receipt_and_trace(monkeypatch) -> None:
     runtime = SocietyRuntime.__new__(SocietyRuntime)
     notices: list[tuple[str, dict[str, object]]] = []
+    attention_calls: list[dict[str, object]] = []
 
     class _Store:
         def __init__(self) -> None:
@@ -147,12 +148,16 @@ async def test_room_settlement_projects_exact_open_receipt_and_trace(monkeypatch
     class _Chat:
         store = chat_store
 
-        async def post_notice(self, session_id: str, payload: dict[str, object]) -> None:
+        async def post_notice_once(
+            self, session_id: str, payload: dict[str, object], *, dedupe_key: str
+        ) -> bool:
+            if chat_store.notice_events:
+                return False
             notices.append((session_id, payload))
             persisted = dict(payload)
-            # Simulate a result notice stored before settle_event_id existed.
-            persisted.pop("settle_event_id", None)
+            persisted["_dedupe_key"] = dedupe_key
             chat_store.notice_events.append({"kind": "notice", "payload": persisted})
+            return True
 
     def runtime_msg_type(name: str):
         from jarvis.society.events import MsgType
@@ -167,7 +172,7 @@ async def test_room_settlement_projects_exact_open_receipt_and_trace(monkeypatch
     runtime._publish_event = None
 
     async def _attention(**kwargs):
-        return None
+        attention_calls.append(kwargs)
 
     monkeypatch.setattr(runtime, "publish_attention", _attention)
 
@@ -190,6 +195,7 @@ async def test_room_settlement_projects_exact_open_receipt_and_trace(monkeypatch
     await runtime._room_settled(settlement)
 
     assert len(notices) == 1
+    assert len(attention_calls) == 2
     session_id, payload = notices[0]
     assert session_id == "jarvis-session-7"
     assert payload["kind"] == "society_room_result"
