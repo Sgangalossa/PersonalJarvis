@@ -1,4 +1,5 @@
 import { useLayoutEffect, useMemo } from "react";
+import { Activity, Cpu, Globe2, Radio, ShieldCheck, Zap } from "lucide-react";
 
 import { useEventStore, type VoiceState } from "@/store/events";
 import { useHomeStore } from "@/store/home";
@@ -44,6 +45,32 @@ import { traceModel } from "@/lib/thinkingSteps";
  * button over the bar takes you back. Nothing yanks the page out from under
  * someone mid-sentence.
  */
+
+function CommandCenterHeader({ assistantName, connected, voiceState }: { assistantName: string; connected: boolean; voiceState: VoiceState }) {
+  return (
+    <header className="jarvis-command-header">
+      <div>
+        <span className="jarvis-command-kicker">MARK VII / PERSONAL COMMAND SYSTEM</span>
+        <h1>{assistantName}</h1>
+      </div>
+      <div className="jarvis-command-status" data-state={voiceState}>
+        <span className="jarvis-status-beacon" aria-hidden />
+        <span>{connected ? "SYSTEM NOMINAL" : "SYSTEM STANDBY"}</span>
+      </div>
+    </header>
+  );
+}
+
+function HudMetric({ icon: Icon, label, value, tone }: { icon: typeof Cpu; label: string; value: string; tone: "live" | "muted" | "danger" }) {
+  return (
+    <div className="jarvis-hud-metric" data-tone={tone}>
+      <Icon className="h-4 w-4" aria-hidden />
+      <span className="jarvis-hud-metric-label">{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
 export function VoiceStage() {
   const t = useT();
   const assistantName = useEventStore((s) => s.assistantName);
@@ -86,13 +113,51 @@ export function VoiceStage() {
   if (!hasLines) {
     return (
       <div
-        className="flex min-h-0 flex-1 flex-col items-center overflow-hidden"
+        className="jarvis-command-center flex min-h-0 flex-1 flex-col overflow-hidden"
         data-testid="voice-stage"
         data-empty="true"
       >
-        <div className="flex w-full max-w-[760px] flex-1 flex-col justify-center gap-8 px-6 pb-14">
-          <Greeting subtitle={t("home.voice_subtitle")} />
-          <JarvisBar phase={phase} hint={hint} />
+        <CommandCenterHeader assistantName={assistantName} connected={connected} voiceState={voiceState} />
+        <div className="jarvis-command-grid min-h-0 flex-1">
+          <aside className="jarvis-hud-rail jarvis-hud-rail-left" aria-label="System telemetry">
+            <HudMetric icon={Cpu} label="CORE" value={connected ? "ONLINE" : "STANDBY"} tone={connected ? "live" : "muted"} />
+            <HudMetric icon={Radio} label="VOICE LINK" value={connecting ? "SYNC" : warming ? "WARM" : "READY"} tone={connected ? "live" : "muted"} />
+            <HudMetric icon={ShieldCheck} label="SECURITY" value="NOMINAL" tone="live" />
+          </aside>
+
+          <div className="jarvis-command-core">
+            <div className="jarvis-command-eyebrow">
+              <span className="jarvis-hud-line" />
+              <span>PERSONAL INTELLIGENCE SYSTEM</span>
+              <span className="jarvis-hud-line" />
+            </div>
+            <div className="jarvis-reactor-shell" data-state={phase}>
+              <div className="jarvis-reactor-grid" aria-hidden />
+              <div className="jarvis-reactor-ring jarvis-reactor-ring-outer" aria-hidden />
+              <div className="jarvis-reactor-ring jarvis-reactor-ring-mid" aria-hidden />
+              <div className="jarvis-reactor-ring jarvis-reactor-ring-inner" aria-hidden />
+              <div className="jarvis-reactor-core">
+                <Zap className="h-7 w-7" aria-hidden />
+                <span className="jarvis-reactor-label">{assistantName.toUpperCase()}</span>
+                <span className="jarvis-reactor-state">{voiceState.toUpperCase()}</span>
+              </div>
+            </div>
+            <Greeting subtitle={t("home.voice_subtitle")} />
+            <div className="jarvis-command-bar">
+              <JarvisBar phase={phase} hint={hint} />
+            </div>
+          </div>
+
+          <aside className="jarvis-hud-rail jarvis-hud-rail-right" aria-label="Network telemetry">
+            <HudMetric icon={Globe2} label="NETWORK" value={connected ? "LINKED" : "LOCAL"} tone={connected ? "live" : "muted"} />
+            <HudMetric icon={Activity} label="MODE" value={voiceState.toUpperCase()} tone={voiceState === "error" ? "danger" : "live"} />
+            <HudMetric icon={Radio} label="WAKE WORD" value={wakePhrase ? "ARMED" : "MANUAL"} tone={wakePhrase ? "live" : "muted"} />
+          </aside>
+        </div>
+        <div className="jarvis-command-footer">
+          <span>JARVIS / COMMAND DECK</span>
+          <span>VOICE · MEMORY · TOOLS · VISION</span>
+          <span>LOCAL-FIRST / ENCRYPTED</span>
         </div>
       </div>
     );
