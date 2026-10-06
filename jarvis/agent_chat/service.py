@@ -449,7 +449,7 @@ class AgentChatService:
         )
         if stored is None:
             return False
-        self._publish_event(session_id, stored)
+        self._publish_stored_event(session_id, stored)
         return True
 
     async def _emit(self, session_id: str, event: dict[str, Any]) -> None:
@@ -489,9 +489,12 @@ class AgentChatService:
 
     def _publish_event(self, session_id: str, event: dict[str, Any]) -> None:
         stored = self.store.append_event(session_id, event)
+        self._publish_stored_event(session_id, stored)
+
+    def _publish_stored_event(self, session_id: str, event: dict[str, Any]) -> None:
         for q in list(self._subscribers.get(session_id, ())):
             try:
-                q.put_nowait(stored)
+                q.put_nowait(event)
             except asyncio.QueueFull:
                 # A reader that stopped draining is dropped: the WS handler
                 # re-syncs from the store when it reconnects.
