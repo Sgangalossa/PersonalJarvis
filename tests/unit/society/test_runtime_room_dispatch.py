@@ -149,7 +149,10 @@ async def test_room_settlement_projects_exact_open_receipt_and_trace(monkeypatch
 
         async def post_notice(self, session_id: str, payload: dict[str, object]) -> None:
             notices.append((session_id, payload))
-            chat_store.notice_events.append({"kind": "notice", "payload": dict(payload)})
+            persisted = dict(payload)
+            # Simulate a result notice stored before settle_event_id existed.
+            persisted.pop("settle_event_id", None)
+            chat_store.notice_events.append({"kind": "notice", "payload": persisted})
 
     def runtime_msg_type(name: str):
         from jarvis.society.events import MsgType
@@ -182,7 +185,8 @@ async def test_room_settlement_projects_exact_open_receipt_and_trace(monkeypatch
         payload={"room_id": "room-42", "reason": "round_cap"},
     )
     await runtime._room_settled(settlement)
-    # Simulate observer/runtime restart replaying the exact durable terminal event.
+    # Simulate an upgrade restart replaying the exact durable terminal event
+    # against the legacy notice persisted by the first call.
     await runtime._room_settled(settlement)
 
     assert len(notices) == 1

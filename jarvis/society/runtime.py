@@ -998,14 +998,18 @@ class SocietyRuntime:
                     existing = getattr(svc.store, "list_events", None)
                     if callable(existing):
                         for prior in existing(session_id):
-                            prior_payload = prior.get("payload") if isinstance(prior, dict) else None
+                            prior_payload = (
+                                prior.get("payload") if isinstance(prior, dict) else None
+                            )
                             if (
                                 isinstance(prior, dict)
                                 and prior.get("kind") == "notice"
                                 and isinstance(prior_payload, dict)
                                 and prior_payload.get("kind") == "society_room_result"
+                                # A room has one durable terminal edge. Matching
+                                # its exact open receipt also covers notices
+                                # written before settle_event_id was added.
                                 and prior_payload.get("room_open_id") == opening.event_id
-                                and prior_payload.get("settle_event_id") == env.event_id
                             ):
                                 return
                     await post(
