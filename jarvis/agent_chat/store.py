@@ -479,6 +479,65 @@ class AgentChatStore:
             "ts_ms": ts_ms,
         }
 
+    def append_agent_message_once(
+        self, session_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Append one trusted agent message atomically by its message id.
+
+        Delivery retries can race across runtime processes. The receipt fold
+        is deliberately idempotent, but the append itself must also be atomic
+        or two concurrent receivers can create two turns from one envelope.
+        """
+        message_id = str(payload.get("message_id") or "").strip()
+        if not message_id:
+            raise ValueError("agent message requires message_id")
+        ts_ms = int(payload.get("ts_ms") or now_ms())
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._conn.execute(
+                    "SELECT seq, ts_ms, kind, payload FROM agent_chat_events "
+                    "WHERE session_id = ? AND kind = 'agent_message' "
+                    "AND json_extract(payload, '$.message_id') = ? "
+                    "ORDER BY seq LIMIT 1",
+                    (session_id, message_id),
+                ).fetchone()
+                if row is not None:
+                    self._conn.rollback()
+                    return None
+                next_row = self._conn.execute(
+                    "SELECT COALESCE(MAX(seq), 0) + 1 AS next "
+                    "FROM agent_chat_events WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+                seq = int(next_row["next"]) if next_row else 1
+                stored = dict(payload)
+                stored.pop("ts_ms", None)
+                self._conn.execute(
+                    "INSERT INTO agent_chat_events "
+                    "(session_id, seq, ts_ms, kind, payload) VALUES (?, ?, ?, ?, ?)",
+                    (session_id, seq, ts_ms, "agent_message",
+                     json.dumps(stored, ensure_ascii=False)),
+                )
+                text = str(stored.get("text") or "")
+                self._conn.execute(
+                    "UPDATE agent_chat_sessions SET message_count = message_count + 1, "
+                    "updated_ms = ?, preview = ?, "
+                    "title = CASE WHEN title = '' THEN ? ELSE title END "
+                    "WHERE session_id = ?",
+                    (ts_ms, text[:_PREVIEW_MAX_CHARS], _title_from(text), session_id),
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return {
+            "kind": "agent_message",
+            "payload": stored,
+            "seq": seq,
+            "ts_ms": ts_ms,
+        }
+
     def incoming_message(self, session_id: str, message_id: str) -> dict[str, Any] | None:
         """Fold a receipt and its status updates; old user messages stay untouched."""
         receipt = None
