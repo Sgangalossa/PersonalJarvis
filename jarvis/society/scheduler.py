@@ -189,6 +189,29 @@ class SocietyScheduler:
         self._running.clear()
         return count
 
+    async def recover_run_slots(self) -> None:
+        """Rebuild normal-agent run ownership from durable CLAIM/RESULT pairs."""
+        events = await self._store.events_since(0, limit=1000)
+        while len(events) == 1000:
+            tail = events[-1].seq
+            more = await self._store.events_since(tail, limit=1000)
+            if not more:
+                break
+            events.extend(more)
+        claims: dict[str, str] = {}
+        completed: set[str] = set()
+        for env in events:
+            if env.msg_type is MsgType.CLAIM:
+                run_id = env.payload.get("run_id")
+                if isinstance(run_id, str) and run_id.strip() and env.from_agent != _SCHEDULER:
+                    claims[run_id.strip()] = env.from_agent
+            elif env.msg_type is MsgType.RESULT:
+                run_id = env.payload.get("run_id")
+                if isinstance(run_id, str) and run_id.strip():
+                    completed.add(run_id.strip())
+        for run_id, agent_id in claims.items():
+            if run_id not in completed:
+                self._running.setdefault(run_id, agent_id)
     async def drive_rooms(self) -> None:
         """Resume every running room. Safe to call repeatedly from recovery."""
         if self._rooms is None or self._room_turn is None:
