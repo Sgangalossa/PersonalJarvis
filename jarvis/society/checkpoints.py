@@ -442,7 +442,13 @@ class CheckpointEngine:
                     if name:
                         await self.note_tool_call(agent_id, name, cli_seat=cli_seat)
                 elif kind == "turn_finished":
-                    break
+                    # A new turn can start before the watcher gets to consume the
+                    # previous terminal event. Keep the same subscription when the
+                    # canonical session is already running again, otherwise the
+                    # next turn would have no watcher and its first tool call would
+                    # silently vanish.
+                    if not svc.is_running(session_id):
+                        break
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 — the world is a projection; a miss never breaks the turn
