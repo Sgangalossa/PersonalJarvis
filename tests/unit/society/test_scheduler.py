@@ -111,6 +111,33 @@ async def test_lead_assign_dispatches_and_claims(world):
     assert scheduler.running == {"run-1": "scout"}
 
 
+async def test_restart_recovers_unfinished_claim_run_slot(tmp_path: Path):
+    path = tmp_path / "run-recovery.db"
+    store = SocietyStore(path)
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Jarvis", tier=Tier.LEAD)
+    await roster.create(name="Scout")
+    first = SocietyScheduler(store, roster, dispatch=FakeDispatcher(), budget_tracker=FakeBudget()).attach()
+    try:
+        await store.append_and_publish(_assign("jarvis", "scout", trace="recover"))
+        assert first.running == {"run-1": "scout"}
+    finally:
+        first.detach()
+
+    second_dispatcher = FakeDispatcher()
+    second = SocietyScheduler(
+        store, roster, dispatch=second_dispatcher, budget_tracker=FakeBudget()
+    ).attach()
+    try:
+        await second.recover_run_slots()
+        assert second.running == {"run-1": "scout"}
+        await store.append_and_publish(_assign("jarvis", "scout", trace="recover-2"))
+        assert second_dispatcher.calls == []
+        assert await _vetoes(store, "recover-2") == [str(FailureReason.CONCURRENCY_CAP)]
+    finally:
+        second.detach()
+        await store.close()
 async def test_room_open_is_driven_by_the_same_scheduler(tmp_path: Path):
     store = SocietyStore(tmp_path / "rooms.db")
     await store.open()
