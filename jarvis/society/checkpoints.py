@@ -434,6 +434,11 @@ class CheckpointEngine:
                 except TimeoutError:
                     if not svc.is_running(session_id):
                         break
+                    # The terminal event belongs to a completed turn, even when
+                    # another turn has already taken ownership of the same session.
+                    # Reset the family window before observing that replacement turn.
+                    self.clear_tool_calls(agent_id)
+                    await self.refresh(agent_id)
                     continue
                 kind = event.get("kind")
                 payload = event.get("payload") or {}
