@@ -507,11 +507,15 @@ class AgentChatService:
         """Persist a trusted internal message even while its receiving chat is busy."""
         if self.store.get_session(session_id) is None:
             raise NoSuchSession(session_id)
-        existing = self.store.incoming_message(session_id, incoming.message_id)
-        if existing is not None:
-            return existing
-        await self._emit(session_id, make_event("agent_message", incoming.model_dump()))
-        return incoming.model_dump()
+        stored = await asyncio.to_thread(
+            self.store.append_agent_message_once,
+            session_id,
+            incoming.model_dump(),
+        )
+        if stored is None:
+            return self.store.incoming_message(session_id, incoming.message_id) or incoming.model_dump()
+        self._publish_stored_event(session_id, stored)
+        return stored["payload"]
 
     async def message_status(
         self, session_id: str, message_id: str, status: str, *, turn_id: str = "", error: str = ""
