@@ -331,7 +331,7 @@ async def test_lead_message_dedupes_each_response_event_not_request() -> None:
 
     chat = _Chat()
     runtime._get_chat = lambda: chat
-    sender = SimpleNamespace(agent_id="scout", name="Scout")
+    sender = SimpleNamespace(agent_id="scout", name="Scout", session_id="society:scout")
 
     await runtime.announce_lead_message(sender, query, request=request)
     await runtime.announce_lead_message(sender, answer, request=request)
