@@ -434,10 +434,19 @@ class AgentChatService:
             self._subscribers.pop(session_id, None)
 
     async def post_notice(self, session_id: str, payload: dict[str, Any]) -> None:
-        """A system line in a session's timeline that is not a turn: the agent
-        society posts learned skills, login requests and queued approvals here.
-        Stored like any event (kind ``notice``) so a reopened chat still shows it."""
+        """Persist a system line in a session's timeline."""
         await self._emit(session_id, make_event("notice", dict(payload)))
+
+    async def post_notice_once(
+        self, session_id: str, payload: dict[str, Any], *, dedupe_key: str
+    ) -> bool:
+        """Persist a durable notice exactly once across runtime processes."""
+        return await asyncio.to_thread(
+            self.store.append_notice_once,
+            session_id,
+            payload,
+            dedupe_key=dedupe_key,
+        )
 
     async def _emit(self, session_id: str, event: dict[str, Any]) -> None:
         # One delivery path for every runner. Normalize only finished receipts;
