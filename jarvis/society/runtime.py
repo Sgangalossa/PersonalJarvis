@@ -338,18 +338,15 @@ class SocietyRuntime:
             if not more:
                 break
             events.extend(more)
+        requests = {
+            item.event_id: item
+            for item in events
+            if item.msg_type is MsgType.ASSIGN
+        }
         for result in events:
             if result.msg_type is not MsgType.RESULT or not result.parent_event_id:
                 continue
-            request = next(
-                (
-                    item
-                    for item in events
-                    if item.event_id == result.parent_event_id
-                    and item.msg_type is MsgType.ASSIGN
-                ),
-                None,
-            )
+            request = requests.get(result.parent_event_id)
             if request is None or request.from_agent != LEAD_AGENT_ID:
                 continue
             status = str(result.payload.get("status") or "done")
