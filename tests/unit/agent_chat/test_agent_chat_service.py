@@ -232,7 +232,7 @@ def test_post_notice_once_publishes_the_single_persisted_event(tmp_path: Path, s
 def test_post_notice_once_is_atomic_across_store_connections(tmp_path: Path) -> None:
     db = tmp_path / "chat.sqlite"
     first = AgentChatStore(db)
-    session = first.create_session(provider="fakeprov", model="", effort=None, cwd=str(tmp_path), surface="jarvis")
+    session = first.create_session(provider="openai", model="", effort="medium", cwd=str(tmp_path), surface="jarvis")
     second = AgentChatStore(db)
     payload = {"kind": "society_room_result", "room_open_id": "open-1", "settle_event_id": "settle-1"}
 
@@ -746,7 +746,7 @@ async def test_receive_message_dedupes_across_store_connections(tmp_path):
     second = AgentChatStore(db)
     svc_a = AgentChatService(first, assistant_name=lambda: "Test")
     svc_b = AgentChatService(second, assistant_name=lambda: "Test")
-    session = svc_a.create_session(provider="fakeprov")
+    session = svc_a.create_session(provider="openai")
     q = svc_a.subscribe(session.session_id)
     from jarvis.society.delivery import IncomingMessage
 
@@ -776,7 +776,7 @@ async def test_receive_message_dedupes_across_store_connections(tmp_path):
 async def test_receive_message_dedupes_concurrent_delivery_and_publishes_once():
     store = AgentChatStore(":memory:")
     svc = AgentChatService(store, assistant_name=lambda: "Test")
-    session = svc.create_session(provider="fakeprov")
+    session = svc.create_session(provider="openai")
     q = svc.subscribe(session.session_id)
     from jarvis.society.delivery import IncomingMessage
 
