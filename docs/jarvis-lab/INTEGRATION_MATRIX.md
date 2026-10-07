@@ -173,6 +173,14 @@ read-only report with the prerequisites for every live scenario in one JSON
 bundle. The bundle always records `native_qualification_complete: false`: it
 prepares the physical-Mac pass but cannot substitute for live receipts.
 
+After the live collector writes one JSON object per scenario,
+`python scripts/macos_agent_bench_qualify.py receipts.json --pretty` validates
+every field with strict JSON types, runs all receipt evaluators and repeats the
+read-only readiness probe. It exits successfully only on a ready macOS host
+with every expected scenario passing; missing, extra or malformed receipts and
+non-macOS hosts fail closed. The report retains only sanitized failures, not
+raw receipt contents.
+
 `jarvis/cu/macos_bench.py` now defines the first deterministic receipt
 contract, `physical-user-takeover`. CI can evaluate safety evidence without
 posting input: takeover detected and zero synthetic events after detection.
