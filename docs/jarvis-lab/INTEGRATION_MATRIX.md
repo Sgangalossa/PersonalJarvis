@@ -187,6 +187,12 @@ dataclasses. Its placeholders use valid JSON types but deliberately fail the
 evaluators until replaced with observed live evidence, so the template cannot
 be mistaken for a completed qualification.
 
+`python scripts/macos_agent_bench_qualify.py --guide` prints the matching live
+description, readiness requirements, success criteria, JSON field names and
+types for each scenario. The guide is generated from the scenario and receipt
+contracts rather than copied into a second checklist, and always reports native
+qualification as incomplete.
+
 `jarvis/cu/macos_bench.py` now defines the first deterministic receipt
 contract, `physical-user-takeover`. CI can evaluate safety evidence without
 posting input: takeover detected and zero synthetic events after detection.

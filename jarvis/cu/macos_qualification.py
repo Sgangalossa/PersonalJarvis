@@ -199,6 +199,32 @@ def build_macos_receipt_template() -> dict[str, dict[str, bool | int | str]]:
     return template
 
 
+def build_macos_qualification_guide() -> dict[str, Any]:
+    """Describe live evidence requirements from the authoritative contracts."""
+    template = build_macos_receipt_template()
+    scenarios: list[dict[str, Any]] = []
+    for scenario in macagentbench_scenarios():
+        receipt_type, _ = _RECEIPT_EVALUATORS[scenario.id]
+        type_hints = get_type_hints(receipt_type)
+        scenarios.append(
+            {
+                **scenario.to_dict(),
+                "receipt_fields": [
+                    {
+                        "name": field.name,
+                        "json_type": type_hints[field.name].__name__,
+                        "placeholder": template[scenario.id][field.name],
+                    }
+                    for field in fields(receipt_type)
+                ],
+            }
+        )
+    return {
+        "native_qualification_complete": False,
+        "scenarios": scenarios,
+    }
+
+
 def evaluate_macos_qualification(
     report: MacOSReadinessReport,
     receipts: Mapping[str, object],
@@ -260,6 +286,7 @@ __all__ = [
     "MacOSQualificationReport",
     "ScenarioQualification",
     "ScenarioPreflight",
+    "build_macos_qualification_guide",
     "build_macos_qualification_preflight",
     "build_macos_receipt_template",
     "evaluate_macos_qualification",

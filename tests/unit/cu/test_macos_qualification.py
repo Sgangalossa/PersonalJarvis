@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from jarvis.cu.macos_bench import macagentbench_scenarios
 from jarvis.cu.macos_qualification import (
+    build_macos_qualification_guide,
     build_macos_qualification_preflight,
     build_macos_receipt_template,
     evaluate_macos_qualification,
@@ -175,6 +176,28 @@ def test_receipt_template_covers_every_scenario_with_strict_json_types() -> None
     assert all(scenario.receipt_valid for scenario in qualification.scenarios)
     assert qualification.native_qualification_complete is False
     assert any(not scenario.evaluation.passed for scenario in qualification.scenarios)
+
+
+def test_qualification_guide_is_derived_from_scenarios_and_receipt_types() -> None:
+    guide = build_macos_qualification_guide()
+    template = build_macos_receipt_template()
+
+    assert guide["native_qualification_complete"] is False
+    assert [row["id"] for row in guide["scenarios"]] == [
+        scenario.id for scenario in macagentbench_scenarios()
+    ]
+    for scenario, row in zip(macagentbench_scenarios(), guide["scenarios"], strict=True):
+        assert row["description"] == scenario.description
+        assert tuple(row["readiness_checks"]) == scenario.readiness_checks
+        assert tuple(row["success_criteria"]) == scenario.success_criteria
+        assert {
+            field["name"]: field["placeholder"] for field in row["receipt_fields"]
+        } == template[scenario.id]
+        assert {field["json_type"] for field in row["receipt_fields"]} <= {
+            "bool",
+            "int",
+            "str",
+        }
 
 
 def test_live_qualification_fails_closed_for_missing_receipt() -> None:

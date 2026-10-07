@@ -11,6 +11,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from jarvis.cu.macos_qualification import (
+    build_macos_qualification_guide,
     build_macos_receipt_template,
     evaluate_macos_qualification,
 )
@@ -51,15 +52,27 @@ def main() -> int:
         action="store_true",
         help="print a typed fail-closed receipt template and exit",
     )
+    parser.add_argument(
+        "--guide",
+        action="store_true",
+        help="print every live criterion and required receipt field",
+    )
     parser.add_argument("--pretty", action="store_true", help="indent the JSON output")
     args = parser.parse_args()
+    if args.template and args.guide:
+        parser.error("--template and --guide are mutually exclusive")
     if args.template:
         if args.receipts is not None:
             parser.error("receipts cannot be supplied with --template")
         _print(build_macos_receipt_template(), pretty=True)
         return 0
+    if args.guide:
+        if args.receipts is not None:
+            parser.error("receipts cannot be supplied with --guide")
+        _print(build_macos_qualification_guide(), pretty=True)
+        return 0
     if args.receipts is None:
-        parser.error("receipts is required unless --template is used")
+        parser.error("receipts is required unless --template or --guide is used")
     return asyncio.run(_run(args.receipts, pretty=args.pretty))
 
 
