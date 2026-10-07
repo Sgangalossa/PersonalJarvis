@@ -168,6 +168,11 @@ actuator construction and hardware-input handoff. It never clicks, types,
 launches applications or prompts for permission. Recent human input is reported
 as an active handoff state, not as a missing capability.
 
+`python scripts/macos_agent_bench_preflight.py --pretty` now combines that
+read-only report with the prerequisites for every live scenario in one JSON
+bundle. The bundle always records `native_qualification_complete: false`: it
+prepares the physical-Mac pass but cannot substitute for live receipts.
+
 `jarvis/cu/macos_bench.py` now defines the first deterministic receipt
 contract, `physical-user-takeover`. CI can evaluate safety evidence without
 posting input: takeover detected and zero synthetic events after detection.
