@@ -173,7 +173,8 @@ CREATE TABLE IF NOT EXISTS society_meta (
 CREATE TABLE IF NOT EXISTS society_deliveries (
     event_id TEXT PRIMARY KEY REFERENCES society_events(event_id),
     status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'delivered', 'failed')),
-    error TEXT NOT NULL DEFAULT ''
+    error TEXT NOT NULL DEFAULT '',
+    claim_id TEXT NOT NULL DEFAULT ''
 );
 CREATE TRIGGER IF NOT EXISTS society_queue_message AFTER INSERT ON society_events
 WHEN NEW.msg_type IN ('SAY', 'QUERY', 'ANSWER', 'PROPOSE', 'HOLD', 'RELEASE')

@@ -589,41 +589,58 @@ class SocietyScheduler:
             busy: set[str | None] = set()
             for queued in await self._store.pending_deliveries():
                 env = _delivery_view(queued)
-                if env.msg_type is MsgType.RESULT:
-                    if _handoff_owner(env) is None:
-                        # Python also recognizes Unicode whitespace that SQL
-                        # trim does not. A blank next_owner creates no work.
-                        await self._store.mark_delivery(env.event_id, "delivered")
-                        continue
-                    # Publication may have been interrupted before _on_result.
-                    # Invalid handoffs must not reach even a busy-chat receipt.
-                    problem = validate_result(env.payload)
-                    if problem is not None:
-                        await self._store.mark_delivery(
-                            env.event_id, "failed", str(FailureReason.INVALID_RESULT)
-                        )
-                        await self._veto(env, FailureReason.INVALID_RESULT, problem)
-                        continue
-                if await self._record_assignment_reply(env):
+                claim_id = uuid4().hex
+                if not await self._store.claim_delivery(env.event_id, claim_id):
+                    # Another scheduler instance owns this recipient's FIFO
+                    # head. Do not run a later queued turn around it.
+                    if await self._store.delivery_status(env.event_id) == "queued":
+                        busy.add(env.to_agent)
                     continue
-                if env.to_agent in busy:
-                    receive = getattr(self._deliver, "receive", None)
-                    target = await self._resolve_target(env)
-                    if receive is not None and isinstance(target, AgentRecord):
-                        try:
-                            await receive(target, env)
-                        except DeliveryBusy:
-                            log.info(
-                                "society: queued receipt deferred for busy recipient %s "
-                                "(event=%s); durable queue will retry",
-                                env.to_agent,
-                                env.event_id,
+                try:
+                    if env.msg_type is MsgType.RESULT:
+                        if _handoff_owner(env) is None:
+                            # Python also recognizes Unicode whitespace that SQL
+                            # trim does not. A blank next_owner creates no work.
+                            await self._store.mark_delivery(env.event_id, "delivered")
+                            continue
+                        # Publication may have been interrupted before _on_result.
+                        # Invalid handoffs must not reach even a busy-chat receipt.
+                        problem = validate_result(env.payload)
+                        if problem is not None:
+                            await self._store.mark_delivery(
+                                env.event_id, "failed", str(FailureReason.INVALID_RESULT)
                             )
-                        except Exception:
-                            log.warning("society: queued receipt projection failed", exc_info=True)
-                    continue
-                if not await self._on_deliver(env):
-                    busy.add(env.to_agent)
+                            await self._veto(env, FailureReason.INVALID_RESULT, problem)
+                            continue
+                    if await self._record_assignment_reply(env):
+                        continue
+                    if env.to_agent in busy:
+                        await self._store.release_delivery(env.event_id, claim_id)
+                        receive = getattr(self._deliver, "receive", None)
+                        target = await self._resolve_target(env)
+                        if receive is not None and isinstance(target, AgentRecord):
+                            try:
+                                await receive(target, env)
+                            except DeliveryBusy:
+                                log.info(
+                                    "society: queued receipt deferred for busy recipient %s "
+                                    "(event=%s); durable queue will retry",
+                                    env.to_agent,
+                                    env.event_id,
+                                )
+                            except Exception:
+                                log.warning(
+                                    "society: queued receipt projection failed", exc_info=True
+                                )
+                        continue
+                    if not await self._on_deliver(env):
+                        await self._store.release_delivery(env.event_id, claim_id)
+                        busy.add(env.to_agent)
+                except BaseException:
+                    # Cancellation or an unexpected observer failure must not
+                    # strand the durable message outside the retry queue.
+                    await self._store.release_delivery(env.event_id, claim_id)
+                    raise
 
     async def _record_assignment_reply(self, env: SocietyEnvelope) -> bool:
         """Assignment outcomes belong to the watcher, not a second chat turn."""
@@ -643,8 +660,6 @@ class SocietyScheduler:
         return True
 
     async def _on_deliver(self, env: SocietyEnvelope) -> bool:
-        if await self._store.delivery_status(env.event_id) != "queued":
-            return True
         reason = None
         if await self._store.kill_switch():
             reason = FailureReason.KILL_SWITCH

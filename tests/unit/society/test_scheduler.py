@@ -872,6 +872,82 @@ async def test_busy_delivery_stays_queued_and_is_logged(tmp_path: Path, caplog):
         await store.close()
 
 
+async def test_concurrent_drainers_claim_handoff_once(tmp_path: Path):
+    class BlockingDeliverer(FakeDeliverer):
+        def __init__(self) -> None:
+            super().__init__()
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def __call__(self, target: AgentRecord, env: SocietyEnvelope) -> None:
+            self.delivered.append((target.agent_id, env.msg_type))
+            self.entered.set()
+            await self.release.wait()
+
+    store = SocietyStore(tmp_path / "concurrent-delivery.db")
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Scout")
+    await roster.create(name="Archivist")
+    deliverer = BlockingDeliverer()
+    first = SocietyScheduler(store, roster, deliver=deliverer)
+    second = SocietyScheduler(store, roster, deliver=deliverer)
+    result = await store.append_and_publish(_handoff("archivist", trace="claim-once"))
+    first_drain = asyncio.create_task(first.drain_deliveries())
+    await deliverer.entered.wait()
+    second_drain = asyncio.create_task(second.drain_deliveries())
+    await asyncio.sleep(0)
+    deliverer.release.set()
+    await asyncio.gather(first_drain, second_drain)
+
+    assert deliverer.delivered == [("archivist", MsgType.RESULT)]
+    assert await store.delivery_status(result.event_id) == "delivered"
+    await store.close()
+
+
+async def test_cancelled_delivery_releases_claim_for_retry(tmp_path: Path):
+    class CancelledDeliverer(FakeDeliverer):
+        async def __call__(self, target: AgentRecord, env: SocietyEnvelope) -> None:
+            raise asyncio.CancelledError
+
+    store = SocietyStore(tmp_path / "cancelled-delivery.db")
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Scout")
+    await roster.create(name="Archivist")
+    result = await store.append_and_publish(_handoff("archivist", trace="cancel-retry"))
+    cancelled = SocietyScheduler(store, roster, deliver=CancelledDeliverer())
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled.drain_deliveries()
+
+    deliverer = FakeDeliverer()
+    await SocietyScheduler(store, roster, deliver=deliverer).drain_deliveries()
+    assert deliverer.delivered == [("archivist", MsgType.RESULT)]
+    assert await store.delivery_status(result.event_id) == "delivered"
+    await store.close()
+
+
+async def test_restart_releases_interrupted_delivery_claim(tmp_path: Path):
+    path = tmp_path / "interrupted-claim.db"
+    store = SocietyStore(path)
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Scout")
+    await roster.create(name="Archivist")
+    result = await store.append_and_publish(_handoff("archivist", trace="restart-claim"))
+    assert await store.claim_delivery(result.event_id, "crashed-process")
+    assert await store.pending_deliveries() == []
+    await store.close()
+
+    reopened = SocietyStore(path)
+    await reopened.open()
+    deliverer = FakeDeliverer()
+    await SocietyScheduler(reopened, Roster(reopened), deliver=deliverer).drain_deliveries()
+    assert deliverer.delivered == [("archivist", MsgType.RESULT)]
+    assert await reopened.delivery_status(result.event_id) == "delivered"
+    await reopened.close()
+
+
 async def test_projected_receipt_stays_queued_until_its_turn(tmp_path: Path):
     class BusyWithReceiptProjection:
         def __init__(self) -> None:

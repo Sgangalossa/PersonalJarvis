@@ -149,6 +149,20 @@ class SocietyStore:
                 "ALTER TABLE society_agents ADD COLUMN computer_id TEXT DEFAULT NULL"
             )
             log.info("society store: migration applied — added computer_id")
+        cur = await self.conn.execute("PRAGMA table_info(society_deliveries)")
+        delivery_cols = {str(r[1]) for r in await cur.fetchall()}
+        await cur.close()
+        if "claim_id" not in delivery_cols:
+            await self.conn.execute(
+                "ALTER TABLE society_deliveries ADD COLUMN claim_id TEXT NOT NULL DEFAULT ''"
+            )
+            log.info("society store: migration applied — added delivery claim_id")
+        # A process crash cannot release its in-flight claims. This store has a
+        # single server writer, so opening it is the durable recovery boundary.
+        await self.conn.execute(
+            "UPDATE society_deliveries SET claim_id = '' "
+            "WHERE status = 'queued' AND claim_id != ''"
+        )
         await self._migrate_checkpoint_vocabulary()
 
     async def _migrate_checkpoint_vocabulary(self) -> None:
@@ -320,8 +334,28 @@ class SocietyStore:
 
     async def mark_delivery(self, event_id: str, status: str, error: str = "") -> None:
         await self.conn.execute(
-            "UPDATE society_deliveries SET status = ?, error = ? WHERE event_id = ?",
+            "UPDATE society_deliveries SET status = ?, error = ?, claim_id = '' "
+            "WHERE event_id = ?",
             (status, error, event_id),
+        )
+
+    async def claim_delivery(self, event_id: str, claim_id: str) -> bool:
+        """Atomically reserve a queued delivery for one scheduler drainer."""
+        cur = await self.conn.execute(
+            "UPDATE society_deliveries SET claim_id = ? "
+            "WHERE event_id = ? AND status = 'queued' AND claim_id = ''",
+            (claim_id, event_id),
+        )
+        claimed = cur.rowcount == 1
+        await cur.close()
+        return claimed
+
+    async def release_delivery(self, event_id: str, claim_id: str) -> None:
+        """Return an interrupted or busy claimed delivery to the retry queue."""
+        await self.conn.execute(
+            "UPDATE society_deliveries SET claim_id = '' "
+            "WHERE event_id = ? AND status = 'queued' AND claim_id = ?",
+            (event_id, claim_id),
         )
 
     async def pending_deliveries(self) -> list[SocietyEnvelope]:
@@ -329,7 +363,7 @@ class SocietyStore:
             "SELECT e.seq, e.event_id, e.msg_type, e.from_agent, e.to_agent, e.trace_id, "
             "e.parent_event_id, e.ts_ms, e.cost_usd, e.payload_json "
             "FROM society_events e JOIN society_deliveries d ON d.event_id = e.event_id "
-            "WHERE d.status = 'queued' ORDER BY e.seq"
+            "WHERE d.status = 'queued' AND d.claim_id = '' ORDER BY e.seq"
         ) as cur:
             rows = await cur.fetchall()
         return [_row_to_envelope(row) for row in rows]
