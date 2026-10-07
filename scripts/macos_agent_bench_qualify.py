@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from jarvis.cu.macos_qualification import (
     build_macos_qualification_guide,
-    build_macos_receipt_template,
+    build_macos_receipt_bundle_template,
     evaluate_macos_qualification,
 )
 from jarvis.cu.macos_readiness import probe_macos_readiness
@@ -25,16 +25,44 @@ def _print(payload: dict[str, Any], *, pretty: bool) -> None:
 async def _run(receipts_path: Path, *, pretty: bool) -> int:
     try:
         receipts_text = await asyncio.to_thread(receipts_path.read_text, encoding="utf-8")
-        receipts = json.loads(receipts_text)
+        bundle = json.loads(receipts_text)
     except (OSError, json.JSONDecodeError) as exc:
         _print({"error": f"could not read receipt JSON: {exc}"}, pretty=pretty)
         return 2
-    if not isinstance(receipts, dict):
-        _print({"error": "receipt JSON must be an object keyed by scenario ID"}, pretty=pretty)
+    if not isinstance(bundle, dict) or set(bundle) != {
+        "receipt_contract_id",
+        "receipts",
+    }:
+        _print(
+            {
+                "error": (
+                    "receipt JSON must be a bundle with exactly "
+                    "receipt_contract_id and receipts"
+                )
+            },
+            pretty=pretty,
+        )
+        return 2
+    contract_id = bundle["receipt_contract_id"]
+    receipts = bundle["receipts"]
+    if not isinstance(contract_id, str) or not isinstance(receipts, dict):
+        _print(
+            {
+                "error": (
+                    "receipt_contract_id must be a string and receipts "
+                    "must be an object keyed by scenario ID"
+                )
+            },
+            pretty=pretty,
+        )
         return 2
 
     readiness = await probe_macos_readiness()
-    qualification = evaluate_macos_qualification(readiness, receipts)
+    qualification = evaluate_macos_qualification(
+        readiness,
+        receipts,
+        receipt_contract_id=contract_id,
+    )
     _print(qualification.to_dict(), pretty=pretty)
     return 0 if qualification.native_qualification_complete else 1
 
@@ -64,7 +92,7 @@ def main() -> int:
     if args.template:
         if args.receipts is not None:
             parser.error("receipts cannot be supplied with --template")
-        _print(build_macos_receipt_template(), pretty=True)
+        _print(build_macos_receipt_bundle_template(), pretty=True)
         return 0
     if args.guide:
         if args.receipts is not None:
