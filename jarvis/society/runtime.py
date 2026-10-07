@@ -325,11 +325,12 @@ class SocietyRuntime:
         return self
 
     async def recover_result_reports(self) -> None:
-        """Replay lead-result projections whose chat notice may have been interrupted.
+        """Replay durable result projections interrupted before their chat notice.
 
-        RESULT is durable before the chat projection runs. A process crash in that
-        gap must not turn a completed assignment into a permanently silent one.
-        The chat projection is atomically deduped by request id, so replay is safe.
+        RESULT and ROOM_SETTLE are durable before their chat projections run. A
+        process crash in either gap must not turn completed work into a permanently
+        silent outcome. Both projections are atomically deduped by their originating
+        request id, so replay is safe alongside a live observer.
         """
         events = await self.store.events_since(0, limit=1000)
         while len(events) == 1000:
@@ -344,6 +345,9 @@ class SocietyRuntime:
             if item.msg_type is MsgType.ASSIGN
         }
         for result in events:
+            if result.msg_type is MsgType.ROOM_SETTLE:
+                await self._room_settled(result)
+                continue
             if result.msg_type is not MsgType.RESULT or not result.parent_event_id:
                 continue
             request = requests.get(result.parent_event_id)

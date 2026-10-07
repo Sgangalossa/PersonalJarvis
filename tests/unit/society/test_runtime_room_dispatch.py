@@ -208,7 +208,101 @@ async def test_room_settlement_projects_exact_open_receipt_and_trace(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_result_recovery_replays_missing_notice_without_duplicates(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_room_result_recovery_replays_missing_notice_once(monkeypatch) -> None:
+    runtime = SocietyRuntime.__new__(SocietyRuntime)
+    from jarvis.society.events import MsgType, SocietyEnvelope
+
+    opening = SocietyEnvelope(
+        msg_type=MsgType.ROOM_OPEN,
+        from_agent="jarvis",
+        trace_id="room-trace-recover",
+        event_id="room-open-recover",
+        payload={
+            "live": True,
+            "text": "Check the rollout.",
+            "members": ["scout"],
+            "reply_policy": "always",
+            "reply_surface": "chat",
+            "reply_session_id": "jarvis-session-recover",
+            "room_id": "room-recover",
+        },
+    )
+    say = SocietyEnvelope(
+        msg_type=MsgType.SAY,
+        from_agent="scout",
+        trace_id=opening.trace_id,
+        parent_event_id=opening.event_id,
+        event_id="say-recover",
+        payload={"text": "The rollout is ready."},
+    )
+    settlement = SocietyEnvelope(
+        msg_type=MsgType.ROOM_SETTLE,
+        from_agent="scheduler",
+        trace_id=opening.trace_id,
+        event_id="room-settle-recover",
+        payload={"room_id": "room-recover", "reason": "round_cap"},
+    )
+
+    class _Store:
+        async def events_since(self, seq: int, *, limit: int):
+            return [opening, say, settlement] if seq == 0 else []
+
+        async def events_for_trace(self, trace_id: str):
+            assert trace_id == opening.trace_id
+            return [opening, say, settlement]
+
+    class _ChatStore:
+        def get_session(self, session_id: str):
+            return SimpleNamespace(session_id=session_id, surface="jarvis")
+
+        def list_sessions(self, *, limit: int, surface: str):
+            return []
+
+    class _Chat:
+        def __init__(self) -> None:
+            self.store = _ChatStore()
+            self.notices: list[dict[str, object]] = []
+
+        async def post_notice_once(
+            self, session_id: str, payload: dict[str, object], *, dedupe_key: str
+        ) -> bool:
+            if any(item["dedupe_key"] == dedupe_key for item in self.notices):
+                return False
+            self.notices.append(
+                {"session_id": session_id, "payload": payload, "dedupe_key": dedupe_key}
+            )
+            return True
+
+    async def _agent(agent_id: str):
+        assert agent_id == "scout"
+        return SimpleNamespace(agent_id=agent_id, name="Scout")
+
+    chat = _Chat()
+    runtime.store = _Store()
+    runtime.roster = SimpleNamespace(get=_agent)
+    runtime._get_chat = lambda: chat
+    runtime._publish_event = None
+
+    async def _attention(**_kwargs):
+        return None
+
+    monkeypatch.setattr(runtime, "publish_attention", _attention)
+
+    await runtime.recover_result_reports()
+    await runtime.recover_result_reports()
+
+    assert len(chat.notices) == 1
+    notice = chat.notices[0]
+    assert notice["dedupe_key"] == "society_room_result:room-open-recover"
+    assert notice["session_id"] == "jarvis-session-recover"
+    assert notice["payload"]["room_open_id"] == opening.event_id
+    assert notice["payload"]["settle_event_id"] == settlement.event_id
+
+
+@pytest.mark.asyncio
+async def test_result_recovery_replays_missing_notice_without_duplicates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     runtime = SocietyRuntime.__new__(SocietyRuntime)
     from jarvis.society.events import MsgType, SocietyEnvelope
 
@@ -227,7 +321,12 @@ async def test_result_recovery_replays_missing_notice_without_duplicates(monkeyp
         trace_id="trace-recover",
         parent_event_id="assign-1",
         event_id="result-1",
-        payload={"run_id": "run-1", "status": "done", "done": "Release checked.", "output": ["report"]},
+        payload={
+            "run_id": "run-1",
+            "status": "done",
+            "done": "Release checked.",
+            "output": ["report"],
+        },
     )
 
     class _Store:
@@ -246,10 +345,14 @@ async def test_result_recovery_replays_missing_notice_without_duplicates(monkeyp
             self.store = _ChatStore()
             self.notices: list[dict[str, object]] = []
 
-        async def post_notice_once(self, session_id: str, payload: dict[str, object], *, dedupe_key: str) -> bool:
+        async def post_notice_once(
+            self, session_id: str, payload: dict[str, object], *, dedupe_key: str
+        ) -> bool:
             if any(item["dedupe_key"] == dedupe_key for item in self.notices):
                 return False
-            self.notices.append({"session_id": session_id, "payload": payload, "dedupe_key": dedupe_key})
+            self.notices.append(
+                {"session_id": session_id, "payload": payload, "dedupe_key": dedupe_key}
+            )
             return True
 
     chat = _Chat()
