@@ -108,3 +108,9 @@ Native macOS qualification remains separate and requires physical Accessibility/
 Next remote-safe task: finish the durable handoff audit at room RESULT projection boundaries, preserving the exact event ID, retry state and owner accounting across restart. Native Mac qualification remains blocked on physical Accessibility and input permissions.
 - Source supervisor audit: normal source packets intentionally follow **admit → checkpoint → acknowledge**. This preserves at-least-once delivery: a checkpoint/ack failure may cause redelivery, but durable admission deduplicates the same delivery. Baseline packets checkpoint before admission by design, because they establish the initial cursor rather than represent an actionable event.
 - Room-result replay now recognizes the exact durable room-open receipt even when the previously persisted notice predates `settle_event_id`. Upgrade recovery therefore does not emit one duplicate result before the new receipt schema takes effect; focused replay qualification is pending CI.
+
+## 2026-10-07 CI repair
+
+- CI #517 on `5b10c52` found one new deterministic failure: duplicate ADR number `0030`.
+- The newer Command Deck decision moved to `docs/adr/0032-jarvis-command-deck.md`; the established Worker Knowledge Surface Parity decision retains `0030`.
+- No failure baseline was changed. Qualification is pending on the latest `jarvis-lab` HEAD.
