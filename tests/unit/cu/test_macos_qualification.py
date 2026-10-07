@@ -5,8 +5,10 @@ from jarvis.cu.macos_bench import macagentbench_scenarios
 from jarvis.cu.macos_qualification import (
     build_macos_qualification_guide,
     build_macos_qualification_preflight,
+    build_macos_receipt_bundle_template,
     build_macos_receipt_template,
     evaluate_macos_qualification,
+    macos_receipt_contract_id,
 )
 from jarvis.cu.macos_readiness import MacOSReadinessReport, ReadinessCheck
 
@@ -160,12 +162,37 @@ def test_preflight_reports_missing_required_check_per_scenario() -> None:
 
 
 def test_live_qualification_requires_every_valid_passing_receipt() -> None:
-    qualification = evaluate_macos_qualification(_ready_report(), _passing_receipts())
+    qualification = evaluate_macos_qualification(
+        _ready_report(),
+        _passing_receipts(),
+        receipt_contract_id=macos_receipt_contract_id(),
+    )
 
+    assert qualification.receipt_contract_matches is True
     assert qualification.native_qualification_complete is True
     assert qualification.unexpected_receipt_ids == ()
     assert all(scenario.receipt_valid for scenario in qualification.scenarios)
     assert all(scenario.evaluation.passed for scenario in qualification.scenarios)
+
+
+def test_live_qualification_rejects_stale_receipt_contract() -> None:
+    qualification = evaluate_macos_qualification(
+        _ready_report(),
+        _passing_receipts(),
+        receipt_contract_id="stale-contract",
+    )
+
+    assert qualification.receipt_contract_matches is False
+    assert qualification.native_qualification_complete is False
+    assert all(scenario.evaluation.passed for scenario in qualification.scenarios)
+
+
+def test_receipt_bundle_template_is_bound_to_current_contract() -> None:
+    bundle = build_macos_receipt_bundle_template()
+
+    assert set(bundle) == {"receipt_contract_id", "receipts"}
+    assert bundle["receipt_contract_id"] == macos_receipt_contract_id()
+    assert bundle["receipts"] == build_macos_receipt_template()
 
 
 def test_receipt_template_covers_every_scenario_with_strict_json_types() -> None:
@@ -182,6 +209,7 @@ def test_qualification_guide_is_derived_from_scenarios_and_receipt_types() -> No
     guide = build_macos_qualification_guide()
     template = build_macos_receipt_template()
 
+    assert guide["receipt_contract_id"] == macos_receipt_contract_id()
     assert guide["native_qualification_complete"] is False
     assert [row["id"] for row in guide["scenarios"]] == [
         scenario.id for scenario in macagentbench_scenarios()
