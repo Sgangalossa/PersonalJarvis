@@ -112,5 +112,6 @@ Next remote-safe task: finish the durable handoff audit at room RESULT projectio
 ## 2026-10-07 CI repair
 
 - CI #517 on `5b10c52` found one new deterministic failure: duplicate ADR number `0030`.
-- The newer Command Deck decision moved to `docs/adr/0032-jarvis-command-deck.md`; the established Worker Knowledge Surface Parity decision retains `0030`.
-- No failure baseline was changed. Qualification is pending on the latest `jarvis-lab` HEAD.
+- The newer Command Deck decision moved to `docs/adr/0037-jarvis-command-deck.md`; the established Worker Knowledge Surface Parity decision retains `0030`, and Final Multilingual Dictation retains `0032`.
+- CI #521 also exposed an Ollama catalog markup drift: capability labels now include inline SVG icons, and update ages are no longer rendered. The parser reads badges from the row's visible text, and the live newest-order contract compares identities with the popular listing instead of relying on removed metadata.
+- No failure baseline was changed. Focused parser, live-catalog, and ADR-uniqueness qualification is pending on the latest `jarvis-lab` HEAD.

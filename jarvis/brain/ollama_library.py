@@ -226,7 +226,25 @@ def parse_search_html(page: str) -> list[dict[str, Any]]:
 
         spans = [_text(m.group(1)) for m in re.finditer(r"<span\b[^>]*>([^<]*)</span>", block)]
         spans = [s for s in spans if s]
-        capabilities = [badge for badge in _CAPABILITY_BADGES if badge in spans]
+        # The catalog used to render badges as plain ``<span>Vision</span>``.
+        # It now prefixes the label with an inline SVG. Read those icon-label
+        # spans separately instead of scanning the whole row, where a blurb
+        # mentioning "vision" must not turn into a capability badge.
+        icon_labels = [
+            _text(match.group(1)).lower()
+            for match in re.finditer(
+                r'<span\b(?=[^>]*class="[^"]*\binline-flex\b[^"]*")[^>]*>'
+                r"(.*?)</span>",
+                block,
+                re.DOTALL,
+            )
+        ]
+        labels = {label.lower() for label in spans} | set(icon_labels)
+        capabilities = [
+            badge
+            for badge in _CAPABILITY_BADGES
+            if badge in labels
+        ]
         sizes = [s for s in spans if re.fullmatch(r"\d+(?:\.\d+)?[bm]", s)]
 
         pulls_match = re.search(
@@ -239,7 +257,7 @@ def parse_search_html(page: str) -> list[dict[str, Any]]:
                 "name": name,
                 "description": description,
                 "capabilities": capabilities,
-                "cloud": "cloud" in spans,
+                "cloud": "cloud" in labels,
                 "sizes": sizes,
                 "pulls": pulls_match.group(1) if pulls_match else "",
                 "updated": updated,

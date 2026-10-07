@@ -57,13 +57,16 @@ def test_the_live_tags_page_still_parses() -> None:
 
 
 def test_the_live_newest_sort_is_honoured() -> None:
-    """``?o=newest`` must change the ORDER: the first rows are days or weeks
-    old, never the years-old names that top the popular listing."""
+    """``?o=newest`` must change the order from the popular listing.
+
+    Ollama stopped rendering per-row update ages in October 2026, so compare
+    the ordered identities rather than metadata the live page no longer owns.
+    """
     models = parse_search_html(_fetch("https://ollama.com/search?o=newest"))
+    popular = parse_search_html(_fetch("https://ollama.com/search"))
     assert len(models) >= 5, "The live newest listing parsed almost empty."
-    head = [m["updated"] for m in models[:5]]
-    assert all(u and "year" not in u for u in head), head
-    assert any(("day" in u or "week" in u or u == "yesterday") for u in head), head
+    assert len(popular) >= 5, "The live popular listing parsed almost empty."
+    assert [m["name"] for m in models[:5]] != [m["name"] for m in popular[:5]]
 
 
 def test_the_live_capability_filter_is_honoured() -> None:

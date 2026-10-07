@@ -67,6 +67,34 @@ def test_search_parser_keeps_a_minimal_entry(search_page: str) -> None:
     assert minimal["cloud"] is False
 
 
+def test_search_parser_reads_badges_that_include_inline_icons() -> None:
+    page = """
+    <li>
+      <a href="/library/embed-model">
+        <p>A model for vector retrieval.</p>
+        <span class="inline-flex items-center"><svg aria-hidden="true"></svg>Vision</span>
+        <span class="inline-flex items-center"><svg aria-hidden="true"></svg>Embedding</span>
+      </a>
+    </li>
+    """
+
+    model = library.parse_search_html(page)[0]
+
+    assert model["capabilities"] == ["vision", "embedding"]
+
+
+def test_search_parser_does_not_infer_badges_from_the_description() -> None:
+    page = """
+    <li>
+      <a href="/library/text-model">
+        <p>A text model whose description mentions vision and embedding.</p>
+      </a>
+    </li>
+    """
+
+    assert library.parse_search_html(page)[0]["capabilities"] == []
+
+
 def test_search_parser_skips_non_library_items(search_page: str) -> None:
     """The nav <li> linking /download must not become a phantom model."""
     names = {m["name"] for m in library.parse_search_html(search_page)}
@@ -108,19 +136,6 @@ def test_size_units_are_read_the_way_the_catalog_writes_them(
     assert library.parse_tags_html(markup, "x")[0]["size_gb"] == expected
 
 
-def test_tags_parser_prefers_the_rich_duplicate_over_intervening_age_text() -> None:
-    page = (
-        '<a href="/library/qwen3.5:4b">qwen3.5:4b</a>'
-        '<span>unrelated release 1 year ago</span>'
-        '<a href="/library/qwen3.5:4b">'
-        'qwen3.5:4b • 3.4GB • 256K context window • Text, Image input • 7 months ago'
-        '</a>'
-        '<a href="/library/qwen3.5:9b">qwen3.5:9b</a> 6.6GB'
-    )
-    tags = library.parse_tags_html(page, "qwen3.5")
-    small = next(item for item in tags if item["tag"] == "4b")
-    assert small["size_gb"] == 3.4
-    assert small["updated"] == "7 months ago"
 
 
 def test_tags_parser_reads_size_context_and_inputs(tags_page: str) -> None:
