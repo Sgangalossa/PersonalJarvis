@@ -118,7 +118,9 @@ async def test_restart_recovers_unfinished_claim_run_slot(tmp_path: Path):
     roster = Roster(store)
     await roster.create(name="Jarvis", tier=Tier.LEAD)
     await roster.create(name="Scout")
-    first = SocietyScheduler(store, roster, dispatch=FakeDispatcher(), budget_tracker=FakeBudget()).attach()
+    first = SocietyScheduler(
+        store, roster, dispatch=FakeDispatcher(), budget_tracker=FakeBudget()
+    ).attach()
     try:
         await store.append_and_publish(_assign("jarvis", "scout", trace="recover"))
         assert first.running == {"run-1": "scout"}
@@ -138,6 +140,63 @@ async def test_restart_recovers_unfinished_claim_run_slot(tmp_path: Path):
     finally:
         second.detach()
         await store.close()
+
+
+async def test_restart_recovery_replays_live_result_ownership_rules(tmp_path: Path):
+    store = SocietyStore(tmp_path / "run-owner-recovery.db")
+    await store.open()
+    try:
+        for run_id, owner in (
+            ("run-scout-old", "scout"),
+            ("run-scout-new", "scout"),
+            ("run-archivist", "archivist"),
+        ):
+            await store.import_event(
+                SocietyEnvelope(
+                    msg_type=MsgType.CLAIM,
+                    from_agent=owner,
+                    to_agent="jarvis",
+                    trace_id=f"trace-{run_id}",
+                    payload={"run_id": run_id},
+                )
+            )
+        # A terminal RESULT without a usable run id releases the sender's
+        # oldest owned slot in the live scheduler.
+        await store.import_event(
+            SocietyEnvelope(
+                msg_type=MsgType.RESULT,
+                from_agent="scout",
+                to_agent="jarvis",
+                trace_id="trace-no-run",
+                payload={"done": "finished", "output": ["report"]},
+            )
+        )
+        # A stale/forged RESULT naming another agent's run must not release it.
+        await store.import_event(
+            SocietyEnvelope(
+                msg_type=MsgType.RESULT,
+                from_agent="scout",
+                to_agent="jarvis",
+                trace_id="trace-foreign-run",
+                payload={
+                    "run_id": "run-archivist",
+                    "done": "not my run",
+                    "output": ["report"],
+                },
+            )
+        )
+
+        recovered = SocietyScheduler(store, Roster(store))
+        await recovered.recover_run_slots()
+
+        assert recovered.running == {
+            "run-scout-new": "scout",
+            "run-archivist": "archivist",
+        }
+    finally:
+        await store.close()
+
+
 async def test_room_open_is_driven_by_the_same_scheduler(tmp_path: Path):
     store = SocietyStore(tmp_path / "rooms.db")
     await store.open()

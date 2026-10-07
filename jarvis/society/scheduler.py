@@ -32,8 +32,8 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Final
-from weakref import WeakValueDictionary
 from uuid import uuid4
+from weakref import WeakValueDictionary
 
 from .delivery import DeliveryBusy
 from .events import SCHEDULER_ACTOR as _SCHEDULER
@@ -190,7 +190,7 @@ class SocietyScheduler:
         return count
 
     async def recover_run_slots(self) -> None:
-        """Rebuild normal-agent run ownership from durable CLAIM/RESULT pairs."""
+        """Replay durable CLAIM/RESULT ownership with the live release rules."""
         events = await self._store.events_since(0, limit=1000)
         while len(events) == 1000:
             tail = events[-1].seq
@@ -198,20 +198,19 @@ class SocietyScheduler:
             if not more:
                 break
             events.extend(more)
-        claims: dict[str, str] = {}
-        completed: set[str] = set()
+        recovered: dict[str, str] = {}
         for env in events:
             if env.msg_type is MsgType.CLAIM:
                 run_id = env.payload.get("run_id")
                 if isinstance(run_id, str) and run_id.strip() and env.from_agent != _SCHEDULER:
-                    claims[run_id.strip()] = env.from_agent
+                    recovered[run_id.strip()] = env.from_agent
             elif env.msg_type is MsgType.RESULT:
-                run_id = env.payload.get("run_id")
-                if isinstance(run_id, str) and run_id.strip():
-                    completed.add(run_id.strip())
-        for run_id, agent_id in claims.items():
-            if run_id not in completed:
-                self._running.setdefault(run_id, agent_id)
+                # Recovery must preserve the same ownership boundary as the
+                # live observer. A forged foreign run id releases nothing;
+                # an absent id releases the sender's oldest owned slot.
+                self._release_result_run(env, running=recovered)
+        for run_id, agent_id in recovered.items():
+            self._running.setdefault(run_id, agent_id)
     async def drive_rooms(self) -> None:
         """Resume every running room. Safe to call repeatedly from recovery."""
         if self._rooms is None or self._room_turn is None:
@@ -474,7 +473,8 @@ class SocietyScheduler:
                         await self._veto(
                             env,
                             FailureReason.BUDGET_EXHAUSTED,
-                            f"{target.name} spent ${spent:.2f} of ${target.daily_budget_usd:.2f} today",
+                            f"{target.name} spent ${spent:.2f} of "
+                            f"${target.daily_budget_usd:.2f} today",
                         )
                         return
                 if self.active_runs(target.agent_id) >= target.max_concurrent_runs:
@@ -519,15 +519,21 @@ class SocietyScheduler:
                         payload={"run_id": run_id, "text": f"{target.name} took the task"},
                     )
                 )
-    def _release_result_run(self, env: SocietyEnvelope) -> None:
+    def _release_result_run(
+        self,
+        env: SocietyEnvelope,
+        *,
+        running: dict[str, str] | None = None,
+    ) -> None:
         """Release only a live run slot owned by the RESULT sender."""
+        slots = self._running if running is None else running
         run_id = env.payload.get("run_id")
         if isinstance(run_id, str):
             run_id = run_id.strip()
         if isinstance(run_id, str) and run_id:
-            owner = self._running.get(run_id)
+            owner = slots.get(run_id)
             if owner == env.from_agent:
-                self._running.pop(run_id, None)
+                slots.pop(run_id, None)
             elif owner is not None:
                 # A durable RESULT must never release another agent's live slot.
                 # This can happen after a stale/forged handoff carries a foreign
@@ -542,9 +548,9 @@ class SocietyScheduler:
                 )
             return
         # No run id: release one slot of the sender, oldest first.
-        for rid, agent in list(self._running.items()):
+        for rid, agent in list(slots.items()):
             if agent == env.from_agent:
-                self._running.pop(rid, None)
+                slots.pop(rid, None)
                 break
 
     async def _on_result(self, env: SocietyEnvelope) -> None:
