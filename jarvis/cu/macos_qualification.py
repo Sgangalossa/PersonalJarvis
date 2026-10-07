@@ -1,6 +1,8 @@
 """Side-effect-free preflight bundle for a physical MacAgentBench pass."""
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, fields
 from typing import Any, get_type_hints
@@ -82,6 +84,8 @@ class MacOSQualificationReport:
     readiness: MacOSReadinessReport
     scenarios: tuple[ScenarioQualification, ...]
     unexpected_receipt_ids: tuple[str, ...]
+    receipt_contract_id: str
+    receipt_contract_matches: bool
     native_qualification_complete: bool
 
     def to_dict(self) -> dict[str, Any]:
@@ -89,6 +93,8 @@ class MacOSQualificationReport:
             "readiness": self.readiness.to_dict(),
             "scenarios": [scenario.to_dict() for scenario in self.scenarios],
             "unexpected_receipt_ids": self.unexpected_receipt_ids,
+            "receipt_contract_id": self.receipt_contract_id,
+            "receipt_contract_matches": self.receipt_contract_matches,
             "native_qualification_complete": self.native_qualification_complete,
         }
 
@@ -116,6 +122,40 @@ _RECEIPT_EVALUATORS: dict[
         evaluate_prompt_injection_resistance,
     ),
 }
+
+
+def macos_receipt_contract_id() -> str:
+    """Fingerprint the scenario and receipt schema used by live qualification."""
+    contract: list[dict[str, Any]] = []
+    scenarios = {scenario.id: scenario for scenario in macagentbench_scenarios()}
+    for scenario_id in sorted(_RECEIPT_EVALUATORS):
+        scenario = scenarios[scenario_id]
+        receipt_type, _ = _RECEIPT_EVALUATORS[scenario_id]
+        type_hints = get_type_hints(receipt_type)
+        contract.append(
+            {
+                "scenario": scenario.to_dict(),
+                "receipt_fields": [
+                    [field.name, type_hints[field.name].__name__]
+                    for field in fields(receipt_type)
+                ],
+            }
+        )
+    encoded = json.dumps(
+        contract,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def build_macos_receipt_bundle_template() -> dict[str, Any]:
+    """Return a version-bound, evaluator-failing live receipt bundle."""
+    return {
+        "receipt_contract_id": macos_receipt_contract_id(),
+        "receipts": build_macos_receipt_template(),
+    }
 
 
 def _invalid_evaluation(scenario_id: str, failure: str) -> MacAgentBenchEvaluation:
@@ -220,6 +260,7 @@ def build_macos_qualification_guide() -> dict[str, Any]:
             }
         )
     return {
+        "receipt_contract_id": macos_receipt_contract_id(),
         "native_qualification_complete": False,
         "scenarios": scenarios,
     }
@@ -228,6 +269,8 @@ def build_macos_qualification_guide() -> dict[str, Any]:
 def evaluate_macos_qualification(
     report: MacOSReadinessReport,
     receipts: Mapping[str, object],
+    *,
+    receipt_contract_id: str | None = None,
 ) -> MacOSQualificationReport:
     """Validate every live receipt against current side-effect-free readiness."""
     preflight = build_macos_qualification_preflight(report)
@@ -268,8 +311,11 @@ def evaluate_macos_qualification(
         and report.ready
         and all(scenario.all_checks_ready for scenario in preflight.scenarios)
     )
+    current_contract_id = macos_receipt_contract_id()
+    contract_matches = receipt_contract_id == current_contract_id
     complete = (
         native_ready
+        and contract_matches
         and not unexpected_ids
         and all(scenario.evaluation.passed for scenario in scenarios)
     )
@@ -277,6 +323,8 @@ def evaluate_macos_qualification(
         readiness=report,
         scenarios=tuple(scenarios),
         unexpected_receipt_ids=unexpected_ids,
+        receipt_contract_id=current_contract_id,
+        receipt_contract_matches=contract_matches,
         native_qualification_complete=complete,
     )
 
@@ -288,6 +336,8 @@ __all__ = [
     "ScenarioPreflight",
     "build_macos_qualification_guide",
     "build_macos_qualification_preflight",
+    "build_macos_receipt_bundle_template",
     "build_macos_receipt_template",
     "evaluate_macos_qualification",
+    "macos_receipt_contract_id",
 ]
