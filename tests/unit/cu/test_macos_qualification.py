@@ -4,6 +4,7 @@ from __future__ import annotations
 from jarvis.cu.macos_bench import macagentbench_scenarios
 from jarvis.cu.macos_qualification import (
     build_macos_qualification_preflight,
+    build_macos_receipt_template,
     evaluate_macos_qualification,
 )
 from jarvis.cu.macos_readiness import MacOSReadinessReport, ReadinessCheck
@@ -164,6 +165,16 @@ def test_live_qualification_requires_every_valid_passing_receipt() -> None:
     assert qualification.unexpected_receipt_ids == ()
     assert all(scenario.receipt_valid for scenario in qualification.scenarios)
     assert all(scenario.evaluation.passed for scenario in qualification.scenarios)
+
+
+def test_receipt_template_covers_every_scenario_with_strict_json_types() -> None:
+    template = build_macos_receipt_template()
+
+    assert list(template) == [scenario.id for scenario in macagentbench_scenarios()]
+    qualification = evaluate_macos_qualification(_ready_report(), template)
+    assert all(scenario.receipt_valid for scenario in qualification.scenarios)
+    assert qualification.native_qualification_complete is False
+    assert any(not scenario.evaluation.passed for scenario in qualification.scenarios)
 
 
 def test_live_qualification_fails_closed_for_missing_receipt() -> None:

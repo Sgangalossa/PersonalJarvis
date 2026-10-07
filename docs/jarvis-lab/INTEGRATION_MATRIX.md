@@ -181,6 +181,12 @@ with every expected scenario passing; missing, extra or malformed receipts and
 non-macOS hosts fail closed. The report retains only sanitized failures, not
 raw receipt contents.
 
+`python scripts/macos_agent_bench_qualify.py --template > receipts.json`
+creates the complete nine-scenario input shape directly from the receipt
+dataclasses. Its placeholders use valid JSON types but deliberately fail the
+evaluators until replaced with observed live evidence, so the template cannot
+be mistaken for a completed qualification.
+
 `jarvis/cu/macos_bench.py` now defines the first deterministic receipt
 contract, `physical-user-takeover`. CI can evaluate safety evidence without
 posting input: takeover detected and zero synthetic events after detection.

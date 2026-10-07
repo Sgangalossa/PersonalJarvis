@@ -10,7 +10,10 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from jarvis.cu.macos_qualification import evaluate_macos_qualification
+from jarvis.cu.macos_qualification import (
+    build_macos_receipt_template,
+    evaluate_macos_qualification,
+)
 from jarvis.cu.macos_readiness import probe_macos_readiness
 
 
@@ -37,9 +40,26 @@ async def _run(receipts_path: Path, *, pretty: bool) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("receipts", type=Path, help="JSON object keyed by scenario ID")
+    parser.add_argument(
+        "receipts",
+        type=Path,
+        nargs="?",
+        help="JSON object keyed by scenario ID",
+    )
+    parser.add_argument(
+        "--template",
+        action="store_true",
+        help="print a typed fail-closed receipt template and exit",
+    )
     parser.add_argument("--pretty", action="store_true", help="indent the JSON output")
     args = parser.parse_args()
+    if args.template:
+        if args.receipts is not None:
+            parser.error("receipts cannot be supplied with --template")
+        _print(build_macos_receipt_template(), pretty=True)
+        return 0
+    if args.receipts is None:
+        parser.error("receipts is required unless --template is used")
     return asyncio.run(_run(args.receipts, pretty=args.pretty))
 
 

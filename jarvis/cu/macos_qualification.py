@@ -181,6 +181,24 @@ def build_macos_qualification_preflight(
     return MacOSQualificationPreflight(readiness=report, scenarios=tuple(scenarios))
 
 
+def build_macos_receipt_template() -> dict[str, dict[str, bool | int | str]]:
+    """Return a typed, fail-closed JSON template for every live scenario."""
+    placeholders: dict[type[Any], bool | int | str] = {
+        bool: False,
+        int: 0,
+        str: "",
+    }
+    template: dict[str, dict[str, bool | int | str]] = {}
+    for scenario in macagentbench_scenarios():
+        receipt_type, _ = _RECEIPT_EVALUATORS[scenario.id]
+        type_hints = get_type_hints(receipt_type)
+        template[scenario.id] = {
+            field.name: placeholders[type_hints[field.name]]
+            for field in fields(receipt_type)
+        }
+    return template
+
+
 def evaluate_macos_qualification(
     report: MacOSReadinessReport,
     receipts: Mapping[str, object],
@@ -243,5 +261,6 @@ __all__ = [
     "ScenarioQualification",
     "ScenarioPreflight",
     "build_macos_qualification_preflight",
+    "build_macos_receipt_template",
     "evaluate_macos_qualification",
 ]
