@@ -359,11 +359,16 @@ class SocietyStore:
         )
 
     async def pending_deliveries(self) -> list[SocietyEnvelope]:
+        """Return every queued delivery, including another drainer's FIFO head.
+
+        A scheduler must see claimed rows so it can block later rows for the
+        same recipient. ``claim_delivery`` remains the execution boundary.
+        """
         async with self.conn.execute(
             "SELECT e.seq, e.event_id, e.msg_type, e.from_agent, e.to_agent, e.trace_id, "
             "e.parent_event_id, e.ts_ms, e.cost_usd, e.payload_json "
             "FROM society_events e JOIN society_deliveries d ON d.event_id = e.event_id "
-            "WHERE d.status = 'queued' AND d.claim_id = '' ORDER BY e.seq"
+            "WHERE d.status = 'queued' ORDER BY e.seq"
         ) as cur:
             rows = await cur.fetchall()
         return [_row_to_envelope(row) for row in rows]

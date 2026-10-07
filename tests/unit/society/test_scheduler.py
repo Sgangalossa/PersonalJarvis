@@ -905,6 +905,49 @@ async def test_concurrent_drainers_claim_handoff_once(tmp_path: Path):
     await store.close()
 
 
+async def test_concurrent_drainers_preserve_recipient_fifo(tmp_path: Path):
+    class FirstDeliveryBlocks(FakeDeliverer):
+        def __init__(self) -> None:
+            super().__init__()
+            self.event_ids: list[str] = []
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def __call__(self, target: AgentRecord, env: SocietyEnvelope) -> None:
+            self.event_ids.append(env.event_id)
+            if len(self.event_ids) == 1:
+                self.entered.set()
+                await self.release.wait()
+            self.delivered.append((target.agent_id, env.msg_type))
+
+    store = SocietyStore(tmp_path / "concurrent-fifo.db")
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Scout")
+    await roster.create(name="Archivist")
+    deliverer = FirstDeliveryBlocks()
+    first = SocietyScheduler(store, roster, deliver=deliverer)
+    second = SocietyScheduler(store, roster, deliver=deliverer)
+    head = await store.append_and_publish(_handoff("archivist", trace="claim-fifo"))
+    tail = await store.append_and_publish(_handoff("archivist", trace="claim-fifo"))
+
+    try:
+        first_drain = asyncio.create_task(first.drain_deliveries())
+        await deliverer.entered.wait()
+        try:
+            await second.drain_deliveries()
+            assert deliverer.event_ids == [head.event_id]
+        finally:
+            deliverer.release.set()
+            await first_drain
+
+        assert deliverer.event_ids == [head.event_id, tail.event_id]
+        assert await store.delivery_status(head.event_id) == "delivered"
+        assert await store.delivery_status(tail.event_id) == "delivered"
+    finally:
+        await store.close()
+
+
 async def test_delivery_arriving_during_active_drain_is_not_stranded(tmp_path: Path):
     class FirstDeliveryBlocks(FakeDeliverer):
         def __init__(self) -> None:
@@ -987,7 +1030,7 @@ async def test_restart_releases_interrupted_delivery_claim(tmp_path: Path):
     await roster.create(name="Archivist")
     result = await store.append_and_publish(_handoff("archivist", trace="restart-claim"))
     assert await store.claim_delivery(result.event_id, "crashed-process")
-    assert await store.pending_deliveries() == []
+    assert [env.event_id for env in await store.pending_deliveries()] == [result.event_id]
     await store.close()
 
     reopened = SocietyStore(path)
