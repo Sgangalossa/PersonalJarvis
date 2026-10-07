@@ -51,12 +51,14 @@ class MacOSQualificationPreflight:
 
     readiness: MacOSReadinessReport
     scenarios: tuple[ScenarioPreflight, ...]
+    receipt_contract_id: str
     native_qualification_complete: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "readiness": self.readiness.to_dict(),
             "scenarios": [scenario.to_dict() for scenario in self.scenarios],
+            "receipt_contract_id": self.receipt_contract_id,
             "native_qualification_complete": self.native_qualification_complete,
         }
 
@@ -218,7 +220,11 @@ def build_macos_qualification_preflight(
                 checks=checks,
             )
         )
-    return MacOSQualificationPreflight(readiness=report, scenarios=tuple(scenarios))
+    return MacOSQualificationPreflight(
+        readiness=report,
+        scenarios=tuple(scenarios),
+        receipt_contract_id=macos_receipt_contract_id(),
+    )
 
 
 def build_macos_receipt_template() -> dict[str, dict[str, bool | int | str]]:

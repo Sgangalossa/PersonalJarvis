@@ -143,7 +143,9 @@ def test_preflight_binds_observed_checks_without_claiming_live_qualification() -
         scenario.id for scenario in macagentbench_scenarios()
     ]
     assert all(row.all_checks_ready for row in bundle.scenarios)
+    assert bundle.receipt_contract_id == macos_receipt_contract_id()
     assert bundle.native_qualification_complete is False
+    assert bundle.to_dict()["receipt_contract_id"] == macos_receipt_contract_id()
     assert bundle.to_dict()["native_qualification_complete"] is False
 
 

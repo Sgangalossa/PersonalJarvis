@@ -170,8 +170,11 @@ as an active handoff state, not as a missing capability.
 
 `python scripts/macos_agent_bench_preflight.py --pretty` now combines that
 read-only report with the prerequisites for every live scenario in one JSON
-bundle. The bundle always records `native_qualification_complete: false`: it
-prepares the physical-Mac pass but cannot substitute for live receipts.
+bundle. The bundle carries the same deterministic `receipt_contract_id` as the
+generated receipt template and guide, so a preflight cannot silently drift from
+the evidence contract used later. It always records
+`native_qualification_complete: false`: it prepares the physical-Mac pass but
+cannot substitute for live receipts.
 
 After the live collector writes one JSON object per scenario,
 `python scripts/macos_agent_bench_qualify.py receipts.json --pretty` validates
