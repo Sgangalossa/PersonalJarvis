@@ -905,6 +905,57 @@ async def test_concurrent_drainers_claim_handoff_once(tmp_path: Path):
     await store.close()
 
 
+async def test_delivery_arriving_during_active_drain_is_not_stranded(tmp_path: Path):
+    class FirstDeliveryBlocks(FakeDeliverer):
+        def __init__(self) -> None:
+            super().__init__()
+            self.event_ids: list[str] = []
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def __call__(self, target: AgentRecord, env: SocietyEnvelope) -> None:
+            self.event_ids.append(env.event_id)
+            if len(self.event_ids) == 1:
+                self.entered.set()
+                await self.release.wait()
+            self.delivered.append((target.agent_id, env.msg_type))
+
+    store = SocietyStore(tmp_path / "delivery-during-drain.db")
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Scout")
+    await roster.create(name="Archivist")
+    deliverer = FirstDeliveryBlocks()
+    scheduler = SocietyScheduler(store, roster, deliver=deliverer).attach()
+    first = SocietyEnvelope(
+        msg_type=MsgType.SAY,
+        from_agent="scout",
+        to_agent="archivist",
+        trace_id="coalesced-drain",
+    )
+    second = SocietyEnvelope(
+        msg_type=MsgType.SAY,
+        from_agent="scout",
+        to_agent="archivist",
+        trace_id="coalesced-drain",
+    )
+    try:
+        first_publish = asyncio.create_task(store.append_and_publish(first))
+        await deliverer.entered.wait()
+        await store.append_and_publish(second)
+        assert await store.delivery_status(second.event_id) == "queued"
+
+        deliverer.release.set()
+        await first_publish
+
+        assert deliverer.event_ids == [first.event_id, second.event_id]
+        assert await store.delivery_status(first.event_id) == "delivered"
+        assert await store.delivery_status(second.event_id) == "delivered"
+    finally:
+        scheduler.detach()
+        await store.close()
+
+
 async def test_cancelled_delivery_releases_claim_for_retry(tmp_path: Path):
     class CancelledDeliverer(FakeDeliverer):
         async def __call__(self, target: AgentRecord, env: SocietyEnvelope) -> None:
