@@ -1,4 +1,4 @@
-name: CodeQL annotation diagnostic export
+name: CodeQL alert diagnostic export
 
 on:
   pull_request:
@@ -8,18 +8,20 @@ on:
 permissions:
   contents: read
   checks: read
+  security-events: read
 
 jobs:
-  export-annotations:
-    name: Export CodeQL alert annotations
+  export-alerts:
+    name: Export CodeQL alerts for triage
     if: github.event.pull_request.number == 1
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Wait for CodeQL analysis and export its alert annotations
+      - name: Wait for CodeQL analyses and export alerts
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         shell: bash
         run: |
           set -euo pipefail
@@ -29,40 +31,54 @@ jobs:
           for attempt in $(seq 1 90); do
             checks="$(gh api -H 'Accept: application/vnd.github+json' \
               "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/check-runs?per_page=100")"
-            check_id="$(jq -r '[.check_runs[] | select(.name == "CodeQL")] | sort_by(.started_at // "") | last | .id // empty' <<< "$checks")"
 
-            if [[ -n "$check_id" ]]; then
-              check="$(gh api "repos/${GITHUB_REPOSITORY}/check-runs/${check_id}")"
-              status="$(jq -r '.status // empty' <<< "$check")"
-              annotation_count="$(jq -r '.output.annotations_count // 0' <<< "$check")"
+            pending_analyses="$(jq '[.check_runs[]
+              | select(.name | startswith("Analyze ("))
+              | select(.status != "completed")] | length' <<< "$checks")"
+            has_python="$(jq '[.check_runs[] | select(.name == "Analyze (python)")] | length' <<< "$checks")"
+            has_javascript="$(jq '[.check_runs[] | select(.name == "Analyze (javascript-typescript)")] | length' <<< "$checks")"
+            codeql_status="$(jq -r '[.check_runs[] | select(.name == "CodeQL")]
+              | sort_by(.started_at // "") | last | .status // empty' <<< "$checks")"
 
-              # The aggregate CodeQL check can finish early with only a configuration
-              # warning. Wait for the check itself to finish AND attach annotations;
-              # individual scan job names are not stable across setup modes.
-              if [[ "$status" == "completed" && "$annotation_count" -gt 0 ]]; then
-                gh api -H 'Accept: application/vnd.github+json' \
-                  "repos/${GITHUB_REPOSITORY}/check-runs/${check_id}/annotations?per_page=100" \
-                  > codeql-diagnostic/annotations.json
-                printf '%s\n' "$check_id" > codeql-diagnostic/check-run-id.txt
-                jq '[.[] | {path, start_line, end_line, annotation_level, title, message}]' \
-                  codeql-diagnostic/annotations.json > codeql-diagnostic/annotations-review.json
-                found=true
-                break
-              fi
+            # The aggregate CodeQL check can finish before language analysis. Wait
+            # for the Python and JavaScript/TypeScript analyzers, plus every analyzer
+            # currently present on this SHA, before querying the alert API.
+            if [[ "$pending_analyses" == "0" && "$has_python" -gt 0 \
+              && "$has_javascript" -gt 0 && "$codeql_status" == "completed" ]]; then
+              gh api -H 'Accept: application/vnd.github+json' \
+                "repos/${GITHUB_REPOSITORY}/code-scanning/alerts?tool_name=CodeQL&state=open&pr=${PR_NUMBER}&per_page=100" \
+                > codeql-diagnostic/alerts.json
+
+              jq '[.[] | {
+                number,
+                state,
+                html_url,
+                rule_id: .rule.id,
+                description: .rule.description,
+                security_severity_level: .rule.security_severity_level,
+                tags: .rule.tags,
+                location: .most_recent_instance.location,
+                message: .most_recent_instance.message.text,
+                ref: .most_recent_instance.ref
+              }]' codeql-diagnostic/alerts.json > codeql-diagnostic/alerts-review.json
+              printf '%s\n' "$HEAD_SHA" > codeql-diagnostic/head-sha.txt
+              printf '%s\n' "$PR_NUMBER" > codeql-diagnostic/pr-number.txt
+              found=true
+              break
             fi
             sleep 10
           done
 
           if [[ "$found" != "true" ]]; then
-            echo "CodeQL completed without readable alert annotations within 15 minutes." >&2
+            echo "CodeQL analysis did not finish for Python and JavaScript/TypeScript within 15 minutes." >&2
             exit 1
           fi
-          echo "Exported $(jq 'length' codeql-diagnostic/annotations.json) CodeQL annotations."
+          echo "Exported $(jq 'length' codeql-diagnostic/alerts.json) open CodeQL alerts for PR #${PR_NUMBER}."
 
-      - name: Upload annotations for triage
+      - name: Upload alert data for review
         uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.6.2
         with:
-          name: codeql-annotations-${{ github.run_id }}
+          name: codeql-alerts-${{ github.run_id }}
           path: codeql-diagnostic/
           if-no-files-found: error
           retention-days: 14
