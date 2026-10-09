@@ -892,7 +892,8 @@ def _run_install() -> None:
         _set("starting", 85, "starting Ollama")
         ok, detail = start_server()
         if not ok:
-            raise RuntimeError(detail)
+            _fail(detail)
+            return
         _set("done", 100, "Ollama is installed and running")
         log.info("ollama-runtime: install completed")
     except Exception:  # noqa: BLE001 — every failure must land in the state
