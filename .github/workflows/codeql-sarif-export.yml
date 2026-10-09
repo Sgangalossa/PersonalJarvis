@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Wait for the CodeQL check and export its annotations
+      - name: Wait for CodeQL analysis and export its alert annotations
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -29,11 +29,19 @@ jobs:
           for attempt in $(seq 1 90); do
             checks="$(gh api -H 'Accept: application/vnd.github+json' \
               "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/check-runs?per_page=100")"
+            python_status="$(jq -r '[.check_runs[] | select(.name == "Analyze (python)")] | sort_by(.started_at // "") | last | .status // empty' <<< "$checks")"
+            javascript_status="$(jq -r '[.check_runs[] | select(.name == "Analyze (javascript-typescript)")] | sort_by(.started_at // "") | last | .status // empty' <<< "$checks")"
             check_id="$(jq -r '[.check_runs[] | select(.name == "CodeQL")] | sort_by(.started_at // "") | last | .id // empty' <<< "$checks")"
 
-            if [[ -n "$check_id" ]]; then
-              status="$(gh api "repos/${GITHUB_REPOSITORY}/check-runs/${check_id}" --jq '.status')"
-              if [[ "$status" == "completed" ]]; then
+            if [[ "$python_status" == "completed" && "$javascript_status" == "completed" && -n "$check_id" ]]; then
+              check="$(gh api "repos/${GITHUB_REPOSITORY}/check-runs/${check_id}")"
+              status="$(jq -r '.status // empty' <<< "$check")"
+              annotation_count="$(jq -r '.output.annotations_count // 0' <<< "$check")"
+
+              # The CodeQL summary check can complete early with only a configuration
+              # warning. Wait until the matching scan jobs finish and alert annotations
+              # have actually been attached to the check.
+              if [[ "$status" == "completed" && "$annotation_count" -gt 0 ]]; then
                 gh api -H 'Accept: application/vnd.github+json' \
                   "repos/${GITHUB_REPOSITORY}/check-runs/${check_id}/annotations?per_page=100" \
                   > codeql-diagnostic/annotations.json
@@ -48,7 +56,7 @@ jobs:
           done
 
           if [[ "$found" != "true" ]]; then
-            echo "A completed CodeQL check with readable annotations was not found within 15 minutes." >&2
+            echo "CodeQL completed without readable alert annotations within 15 minutes." >&2
             exit 1
           fi
           echo "Exported $(jq 'length' codeql-diagnostic/annotations.json) CodeQL annotations."
