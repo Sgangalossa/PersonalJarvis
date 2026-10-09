@@ -42,7 +42,9 @@ def open_file(path: Path) -> bool:
         # as an option by open/xdg-open. No shell is involved.
         path_str = Path(os.path.abspath(os.fspath(path))).as_posix()
         cmd = ["open", path_str] if plat == "darwin" else ["xdg-open", path_str]
-        subprocess.Popen(  # noqa: S603
+        # The opener is selected from this module's fixed allowlist and the file
+        # is a separate absolute argv item; no shell or option parsing is involved.
+        subprocess.Popen(  # noqa: S603  # lgtm[py/command-line-injection]
             cmd, shell=False, creationflags=NO_WINDOW_CREATIONFLAGS, close_fds=True
         )
         return True
