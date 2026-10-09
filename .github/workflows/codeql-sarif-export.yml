@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   sarif-export:
-    name: SARIF (\${{ matrix.language }})
+    name: SARIF (${{ matrix.language }})
     if: github.event.pull_request.number == 1
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -19,36 +19,36 @@ jobs:
       matrix:
         include:
           - language: python
-            build-mode: none
+            build_mode: none
           - language: javascript-typescript
-            build-mode: none
+            build_mode: none
           - language: ruby
-            build-mode: none
+            build_mode: none
           - language: cpp
-            build-mode: autobuild
+            build_mode: autobuild
     steps:
       - name: Checkout PR head
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: \${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
         with:
-          languages: \${{ matrix.language }}
-          build-mode: \${{ matrix.build-mode }}
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build_mode }}
 
       - name: Analyze and retain SARIF locally
         uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
         with:
-          output: sarif-output/\${{ matrix.language }}
+          output: sarif-output/${{ matrix.language }}
           upload: never
 
       - name: Upload diagnostic SARIF artifact
         uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.6.2
         with:
-          name: codeql-sarif-\${{ matrix.language }}-\${{ github.run_id }}
-          path: sarif-output/\${{ matrix.language }}/
+          name: codeql-sarif-${{ matrix.language }}-${{ github.run_id }}
+          path: sarif-output/${{ matrix.language }}/
           if-no-files-found: error
           retention-days: 14
