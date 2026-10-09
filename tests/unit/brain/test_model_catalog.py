@@ -830,11 +830,12 @@ class TestRealtimeCatalog:
         assert ids[0] == "gemini-live-2.5-flash-native-audio"
         assert len(ids) == len(set(ids))
 
-    def test_openai_realtime_voices_match_the_ga_voice_set(self) -> None:
+    def test_openai_live_voices_match_the_ga_voice_set(self) -> None:
         from jarvis.brain.model_catalog import REALTIME_VOICES
 
-        ids = [v.id for v in REALTIME_VOICES["openai-realtime"]]
+        ids = [v.id for v in REALTIME_VOICES["openai-live"]]
         assert ids == [
+            "marin",
             "alloy",
             "ash",
             "ballad",
@@ -843,7 +844,6 @@ class TestRealtimeCatalog:
             "sage",
             "shimmer",
             "verse",
-            "marin",
             "cedar",
         ]
 
@@ -881,6 +881,7 @@ class TestRealtimeCatalog:
         # PROVIDER_CATALOG (else /providers/{id}/models would 200 with a
         # single-selection response that can't express model+voice together).
         assert catalog_spec("openai-realtime") is None
+        assert catalog_spec("openai-live") is None
         assert catalog_spec("gemini-live") is None
         assert catalog_spec("vertex-live") is None
         assert catalog_spec("codex-subscription-realtime") is None
