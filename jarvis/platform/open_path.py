@@ -37,10 +37,13 @@ def open_file(path: Path) -> bool:
         if plat == "win32":
             os.startfile(str(path))  # type: ignore[attr-defined]  # noqa: S606
             return True
-        path_str = path.as_posix()
+        # Normalize to an absolute path before passing it to a desktop opener.
+        # This prevents a relative filename beginning with '-' from being parsed
+        # as an option by open/xdg-open. No shell is involved.
+        path_str = Path(os.path.abspath(os.fspath(path))).as_posix()
         cmd = ["open", path_str] if plat == "darwin" else ["xdg-open", path_str]
         subprocess.Popen(  # noqa: S603
-            cmd, creationflags=NO_WINDOW_CREATIONFLAGS, close_fds=True
+            cmd, shell=False, creationflags=NO_WINDOW_CREATIONFLAGS, close_fds=True
         )
         return True
     except OSError as exc:

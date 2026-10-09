@@ -36,7 +36,19 @@ def test_open_file_linux_uses_xdg_open():
          patch.object(op.subprocess, "Popen") as popen:
         assert op.open_file(Path("/x/y.md")) is True
         argv = popen.call_args.args[0]
-        assert argv[0] == "xdg-open" and argv[1] == "/x/y.md"
+        assert argv[0] == "xdg-open"
+        assert argv[1] == Path(op.os.path.abspath("/x/y.md")).as_posix()
+
+
+def test_open_file_linux_makes_option_like_relative_path_absolute():
+    with patch.object(op, "detect_capabilities", return_value=_caps()), \
+         patch.object(op, "detect_platform", return_value="linux"), \
+         patch.object(op.subprocess, "Popen") as popen:
+        assert op.open_file(Path("--help")) is True
+        argv = popen.call_args.args[0]
+        assert argv[0] == "xdg-open"
+        assert argv[1] == Path(op.os.path.abspath("--help")).as_posix()
+        assert not argv[1].startswith("-")
 
 
 def test_open_file_darwin_uses_open():
