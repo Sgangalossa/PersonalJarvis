@@ -58,6 +58,8 @@ _PUBLIC_CATALOG = (
     / "catalog.json"
 )
 _SAFE_NAME = re.compile(r"[^a-z0-9]+")
+# A request may name only one ordinary GLB file, never a path or drive prefix.
+_GLB_FILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._ \-]{0,250}\.glb")
 _SHARE_ID = re.compile(r"^[0-9a-f]{16}$")
 _SHARE_LOCK = threading.Lock()
 _SHARE_REPORT_CAP = 100
@@ -210,10 +212,14 @@ def _figure_path(file_name: str) -> Path | None:
     request can never read or delete a file elsewhere (``..``, separators, or a
     Windows drive-relative name such as ``C:x.glb``).
     """
-    if not file_name.endswith(".glb"):
+    if _GLB_FILE_NAME.fullmatch(file_name) is None:
+        return None
+    root = figures_dir()
+    candidate = root / file_name
+    if candidate.is_symlink():
         return None
     try:
-        return safe_child(figures_dir(), file_name)
+        return safe_child(root, file_name)
     except UnsafePathError:  # an escaping name is simply not a figure; the route answers 404
         return None
 
@@ -236,24 +242,42 @@ def _slug(name: str) -> str:
 
 
 def _extras(path: Path) -> dict[str, Any]:
+    # Do not let a caller-supplied Path flow straight to the GLB parser.
+    safe_path = _figure_path(path.name)
+    if safe_path is None or not safe_path.is_file():
+        return {}
+    try:
+        if path.resolve() != safe_path.resolve():
+            return {}
+    except (OSError, RuntimeError, ValueError):
+        return {}
     gate = _load_gate()
     if gate is None:
         return {}
     tools = gate._load_tools()
     try:
-        doc = tools.read_glb(path).doc
+        doc = tools.read_glb(safe_path).doc
     except (ValueError, OSError):
         return {}
     return (doc.get("asset", {}).get("extras") or {}).get("jarvis_figure") or {}
 
 
 def _describe(path: Path) -> dict[str, Any]:
-    extras = _extras(path)
+    safe_path = _figure_path(path.name)
+    if safe_path is None or not safe_path.is_file():
+        raise ValueError("not a stored figure")
+    try:
+        matches_stored_path = path.resolve() == safe_path.resolve()
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ValueError("not a stored figure") from exc
+    if not matches_stored_path:
+        raise ValueError("not a stored figure")
+    extras = _extras(safe_path)
     return {
-        "id": path.stem,
-        "file": path.name,
-        "url": f"/api/society/figures/{path.name}",
-        "bytes": path.stat().st_size,
+        "id": safe_path.stem,
+        "file": safe_path.name,
+        "url": f"/api/society/figures/{safe_path.name}",
+        "bytes": safe_path.stat().st_size,
         "archetype": extras.get("archetype"),
         "height_m": extras.get("height_m"),
         "clips": sorted((extras.get("clips") or {}).keys()),
@@ -266,7 +290,22 @@ async def list_figures() -> dict[str, Any]:
     folder = figures_dir()
     if not folder.exists():
         return {"figures": [], "total": 0}
-    rows = await run_in_threadpool(lambda: [_describe(p) for p in sorted(folder.glob("*.glb"))])
+
+    def _describe_candidates() -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for candidate in sorted(folder.glob("*.glb")):
+            path = _figure_path(candidate.name)
+            if path is None or not path.is_file():
+                continue
+            try:
+                if candidate.resolve() != path.resolve():
+                    continue
+            except (OSError, RuntimeError, ValueError):
+                continue
+            rows.append(_describe(path))
+        return rows
+
+    rows = await run_in_threadpool(_describe_candidates)
     return {"figures": rows, "total": len(rows)}
 
 
@@ -434,6 +473,8 @@ async def delist_shared_figure(share_id: str) -> dict[str, Any]:
 
 @router.get("/{file_name}")
 def get_figure(file_name: str) -> FileResponse:
+    if _GLB_FILE_NAME.fullmatch(file_name) is None:
+        raise HTTPException(404, "no such figure")
     path = _figure_path(file_name)
     if path is None or not path.is_file():
         raise HTTPException(404, "no such figure")
@@ -444,6 +485,8 @@ def get_figure(file_name: str) -> FileResponse:
 
 @router.delete("/{file_name}", openapi_extra={"x-jarvis-dangerous": True})
 async def delete_figure(file_name: str) -> dict[str, Any]:
+    if _GLB_FILE_NAME.fullmatch(file_name) is None:
+        raise HTTPException(404, "no such figure")
     path = _figure_path(file_name)
     if path is None or not path.is_file():
         raise HTTPException(404, "no such figure")

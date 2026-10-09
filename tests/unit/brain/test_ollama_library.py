@@ -316,7 +316,7 @@ async def test_search_degrades_honestly_when_offline(monkeypatch, _machine) -> N
     )
     result = await library.search_library("qwen")
     assert result["models"] == []
-    assert "ollama.com" in result["error"]
+    assert result["error"].startswith("ollama.com did not answer")
 
 
 @pytest.mark.asyncio

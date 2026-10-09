@@ -895,5 +895,6 @@ def _run_install() -> None:
             raise RuntimeError(detail)
         _set("done", 100, "Ollama is installed and running")
         log.info("ollama-runtime: install completed")
-    except Exception as exc:  # noqa: BLE001 — every failure must land in the state
-        _fail(str(exc))
+    except Exception:  # noqa: BLE001 — every failure must land in the state
+        log.exception("ollama-runtime: install failed")
+        _fail("Ollama installation failed; details are available in the application log")

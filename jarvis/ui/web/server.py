@@ -2248,10 +2248,13 @@ class WebServer:
             if full_path.startswith("api/") or full_path.startswith("ws"):
                 return JSONResponse({"detail": "Not Found"}, status_code=404)
             try:
-                target = (DIST_DIR / full_path).resolve()
-                dist_root = DIST_DIR.resolve()
-                if target.is_file() and dist_root in target.parents:
-                    return FileResponse(str(target))
+                # Resolve before checking containment so symlinks and traversal
+                # cannot escape the built frontend directory.
+                dist_root = os.path.realpath(os.fspath(DIST_DIR))
+                target = os.path.realpath(os.path.join(dist_root, full_path))
+                prefix = dist_root if dist_root.endswith(os.sep) else dist_root + os.sep
+                if target.startswith(prefix) and os.path.isfile(target):
+                    return FileResponse(target)
             except (OSError, ValueError):
                 pass
             # A missing asset (image/script/font) gets an honest 404, never the

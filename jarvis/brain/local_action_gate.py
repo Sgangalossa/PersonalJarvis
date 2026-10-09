@@ -302,11 +302,14 @@ def _is_narrated(text: str, start: int, end: int) -> bool:
     as ``spawn_gate._REPORTED_VEHICLE_RE``: the vocabulary matches, but the
     grammar says the user is reporting, not requesting.
     """
-    before = text[:start]
+    # Only nearby context affects narration detection. Bound it so a pathological
+    # user utterance with a huge whitespace run cannot stall action routing.
+    before = text[max(0, start - 4096):start]
+    after = text[end:end + 256]
     clause_breaks = list(_CLAUSE_START_RE.finditer(before))
     clause = before[clause_breaks[-1].end():] if clause_breaks else before
     return bool(
-        _INDICATIVE_SUBJECT_AFTER_RE.match(text, end)
+        _INDICATIVE_SUBJECT_AFTER_RE.match(after)
         or _INDICATIVE_SUBJECT_BEFORE_RE.search(before)
         or _NARRATING_SUBJECT_RE.search(clause)
     )
