@@ -205,6 +205,11 @@ the same strict schema and evaluator used by the final bundle. Stale, mistyped
 or unsafe evidence therefore fails at capture time without probing readiness or
 claiming native completion.
 
+After all nine envelopes pass, `python scripts/macos_agent_bench_qualify.py
+--assemble receipts/ > receipts.json` creates the final version-bound bundle.
+Assembly rejects stale or failing envelopes, duplicate scenario IDs, missing
+scenarios and unrelated JSON before the native readiness gate runs.
+
 `jarvis/cu/macos_bench.py` now defines the first deterministic receipt
 contract, `physical-user-takeover`. CI can evaluate safety evidence without
 posting input: takeover detected and zero synthetic events after detection.
