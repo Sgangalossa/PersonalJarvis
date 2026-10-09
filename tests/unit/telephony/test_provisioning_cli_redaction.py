@@ -11,21 +11,41 @@ import scripts.telephony_provision as cli
 
 
 @pytest.mark.parametrize("command", ["buy", "set_webhook", "inspect"])
-def test_webhook_query_secrets_are_redacted_from_output(command, monkeypatch, capsys):
-    secret = "supersecretvalue123"
+def test_provisioning_output_omits_private_resource_data(command, monkeypatch, capsys):
+    private_values = (
+        "+49301234567",
+        "PN123456789",
+        "supersecretvalue123",
+        "jarvis.example.com",
+    )
     owned = SimpleNamespace(
-        phone_number="+49301234567",
-        sid="PN123456789",
-        voice_url=f"https://jarvis.example.com/api/telephony/voice?token={secret}",
+        phone_number=private_values[0],
+        sid=private_values[1],
+        voice_url=(
+            "https://jarvis.example.com/api/telephony/voice?"
+            f"token={private_values[2]}"
+        ),
     )
     monkeypatch.setattr(cli, "_resolve_credentials", lambda _args: ("AC123", "auth-token"))
     monkeypatch.setattr(cli.provisioning, "buy_number", lambda *a, **k: owned)
     monkeypatch.setattr(cli.provisioning, "set_voice_webhook", lambda *a, **k: owned)
     monkeypatch.setattr(cli.provisioning, "inspect_number", lambda *a, **k: owned)
 
-    args = Namespace(number=owned.phone_number, url="https://jarvis.example.com/api/telephony/voice")
+    args = Namespace(number=owned.phone_number, url=owned.voice_url)
     getattr(cli, f"_cmd_{command}")(args)
 
     output = capsys.readouterr().out
-    assert secret not in output
-    assert "token=<redacted:query_secret>" in output
+    assert all(private not in output for private in private_values)
+    assert "requested number" in output
+
+
+def test_missing_number_output_omits_requested_number(monkeypatch, capsys):
+    number = "+49301234567"
+    monkeypatch.setattr(cli, "_resolve_credentials", lambda _args: ("AC123", "auth-token"))
+    monkeypatch.setattr(cli.provisioning, "inspect_number", lambda *a, **k: None)
+
+    assert cli._cmd_inspect(Namespace(number=number)) == 1
+
+    output = capsys.readouterr().out
+    assert number not in output
+    assert output == "The requested number is not owned by this account.\n"
