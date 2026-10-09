@@ -1,8 +1,8 @@
 """CLI over jarvis.telephony.provisioning — list/buy numbers, set the webhook.
 
 Reads Twilio credentials from the standard places: account SID from
-``[integrations.twilio]`` in jarvis.toml (or ``--sid``), auth token from the
-Credential Manager (``twilio_auth_token`` / ENV ``TWILIO_AUTH_TOKEN``).
+``[integrations.twilio]`` in jarvis.toml (or ``--sid``), auth token from
+the Credential Manager (``twilio_auth_token`` / ENV ``TWILIO_AUTH_TOKEN``).
 
 Examples
 --------
@@ -27,6 +27,7 @@ except Exception:  # noqa: BLE001, S110 - console encoding is best-effort
     pass
 
 from jarvis.core.config import get_secret, load_config
+from jarvis.core.redact import safe_preview
 from jarvis.telephony import provisioning
 
 
@@ -73,7 +74,8 @@ def _cmd_buy(args: argparse.Namespace) -> int:
     owned = provisioning.buy_number(
         sid, token, phone_number=args.number, voice_webhook_url=args.url
     )
-    print(f"Bought {owned.phone_number} (sid={owned.sid}); voice webhook -> {owned.voice_url}")
+    webhook = safe_preview(owned.voice_url, max_chars=512)
+    print(f"Bought {owned.phone_number} (sid={owned.sid}); voice webhook -> {webhook}")
     return 0
 
 
@@ -82,7 +84,8 @@ def _cmd_set_webhook(args: argparse.Namespace) -> int:
     owned = provisioning.set_voice_webhook(
         sid, token, phone_number=args.number, voice_webhook_url=args.url
     )
-    print(f"Updated {owned.phone_number}: voice webhook -> {owned.voice_url}")
+    webhook = safe_preview(owned.voice_url, max_chars=512)
+    print(f"Updated {owned.phone_number}: voice webhook -> {webhook}")
     return 0
 
 
@@ -92,7 +95,8 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     if owned is None:
         print(f"{args.number} is not owned by this account.")
         return 1
-    print(f"{owned.phone_number} (sid={owned.sid}); voice webhook = {owned.voice_url or '(none)'}")
+    webhook = safe_preview(owned.voice_url or "(none)", max_chars=512)
+    print(f"{owned.phone_number} (sid={owned.sid}); voice webhook = {webhook}")
     return 0
 
 
