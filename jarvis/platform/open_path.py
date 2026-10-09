@@ -73,15 +73,21 @@ def reveal_in_folder(path: Path) -> bool:
                 close_fds=True,
             )
             return True
+        # Normalize paths before passing them to open/xdg-open so relative names
+        # beginning with '-' cannot be interpreted as command-line options.
+        path_str = Path(os.path.abspath(os.fspath(path))).as_posix()
         if plat == "darwin":
             subprocess.Popen(  # noqa: S603
-                ["open", "-R", path.as_posix()],
+                ["open", "-R", path_str],
+                shell=False,
                 creationflags=NO_WINDOW_CREATIONFLAGS,
                 close_fds=True,
             )
             return True
+        parent_str = Path(path_str).parent.as_posix()
         subprocess.Popen(  # noqa: S603
-            ["xdg-open", path.parent.as_posix()],
+            ["xdg-open", parent_str],
+            shell=False,
             creationflags=NO_WINDOW_CREATIONFLAGS,
             close_fds=True,
         )

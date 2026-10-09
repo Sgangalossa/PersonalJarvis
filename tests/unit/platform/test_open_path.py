@@ -81,6 +81,18 @@ def test_reveal_linux_opens_parent_dir():
         assert op.reveal_in_folder(Path("/x/y/z.md")) is True
         argv = popen.call_args.args[0]
         assert argv[0] == "xdg-open" and argv[1] == "/x/y"
+        assert popen.call_args.kwargs["shell"] is False
+
+
+def test_reveal_linux_makes_option_like_relative_path_absolute():
+    with patch.object(op, "detect_capabilities", return_value=_caps()), \
+         patch.object(op, "detect_platform", return_value="linux"), \
+         patch.object(op.subprocess, "Popen") as popen:
+        assert op.reveal_in_folder(Path("-rf")) is True
+        argv = popen.call_args.args[0]
+        assert argv[0] == "xdg-open"
+        assert argv[1] == Path(op.os.path.abspath("-rf")).parent.as_posix()
+        assert not argv[1].startswith("-")
 
 
 def test_reveal_windows_uses_explorer_select():
