@@ -623,6 +623,7 @@ REALTIME_VOICES: dict[str, list[ModelInfo]] = {
     "local-realtime": _curated([("auto", "Your server's own voice")]),
     "openai-live": _ids(
         [
+            "marin",
             "alloy",
             "ash",
             "ballad",
@@ -631,7 +632,6 @@ REALTIME_VOICES: dict[str, list[ModelInfo]] = {
             "sage",
             "shimmer",
             "verse",
-            "marin",
             "cedar",
         ]
     ),
