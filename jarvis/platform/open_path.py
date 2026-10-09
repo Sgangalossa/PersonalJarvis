@@ -96,9 +96,10 @@ def open_file_with(file: Path, launch_kind: str, launch_value: str) -> bool:
     always passed as the launch argument.
 
     Unlike ``os.startfile(bare_name)`` — a silent ShellExecute no-op from the
-    pythonw background process — every branch starts a real ``subprocess`` so a
-    window actually appears. Returns False on a headless host, an unknown kind,
-    or a launch error. Never raises (mirrors :func:`open_file`).
+    pythonw background process — launch targets are resolved before dispatch.
+    Windows shortcuts use ShellExecute with an explicit file argument, without
+    invoking ``cmd.exe``. Returns False on a headless host, unknown kind or launch
+    error. Never raises (mirrors :func:`open_file`).
     """
     if not detect_capabilities().display_present:
         log.info("open_file_with: no display present — skipping %s", file)
@@ -130,20 +131,15 @@ def open_file_with(file: Path, launch_kind: str, launch_value: str) -> bool:
             )
             return True
         if launch_kind == "startfile":
-            # Windows .lnk/app launched with the file as an argument via `start`.
-            # cmd.exe re-parses its own command line, and list2cmdline only
-            # quotes arguments that contain spaces, so a file named
-            # "a&calc.md" would have run a second command. Both paths are
-            # double-quoted by hand (a Windows path cannot contain '"'; one
-            # that does is refused) and the string reaches CreateProcess as is.
+            # ShellExecute opens a resolved Windows shortcut/app directly and
+            # passes the file path as parameters. Avoid cmd.exe entirely: it
+            # reparses metacharacters and environment expansions.
             file_str = str(file)
             if '"' in launch_value or '"' in file_str:
                 log.warning("open_file_with: refusing a path containing a quote: %r", file_str)
                 return False
-            subprocess.Popen(  # noqa: S603
-                f'cmd /c start "" "{launch_value}" "{file_str}"',
-                creationflags=NO_WINDOW_CREATIONFLAGS,
-                close_fds=True,
+            os.startfile(  # type: ignore[attr-defined]  # noqa: S606
+                launch_value, "open", arguments=f'"{file_str}"'
             )
             return True
         log.warning("open_file_with: unknown launch_kind %r", launch_kind)
