@@ -80,7 +80,8 @@ def test_reveal_linux_opens_parent_dir():
          patch.object(op.subprocess, "Popen") as popen:
         assert op.reveal_in_folder(Path("/x/y/z.md")) is True
         argv = popen.call_args.args[0]
-        assert argv[0] == "xdg-open" and argv[1] == "/x/y"
+        expected_parent = Path(op.os.path.abspath("/x/y/z.md")).parent.as_posix()
+        assert argv[0] == "xdg-open" and argv[1] == expected_parent
         assert popen.call_args.kwargs["shell"] is False
 
 
