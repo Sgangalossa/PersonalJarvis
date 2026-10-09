@@ -835,6 +835,7 @@ class TestRealtimeCatalog:
 
         ids = [v.id for v in REALTIME_VOICES["openai-live"]]
         assert ids == [
+            "marin",
             "alloy",
             "ash",
             "ballad",
@@ -843,7 +844,6 @@ class TestRealtimeCatalog:
             "sage",
             "shimmer",
             "verse",
-            "marin",
             "cedar",
         ]
 
