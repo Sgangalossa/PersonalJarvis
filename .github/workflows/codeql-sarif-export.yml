@@ -29,18 +29,16 @@ jobs:
           for attempt in $(seq 1 90); do
             checks="$(gh api -H 'Accept: application/vnd.github+json' \
               "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/check-runs?per_page=100")"
-            python_status="$(jq -r '[.check_runs[] | select(.name == "Analyze (python)")] | sort_by(.started_at // "") | last | .status // empty' <<< "$checks")"
-            javascript_status="$(jq -r '[.check_runs[] | select(.name == "Analyze (javascript-typescript)")] | sort_by(.started_at // "") | last | .status // empty' <<< "$checks")"
             check_id="$(jq -r '[.check_runs[] | select(.name == "CodeQL")] | sort_by(.started_at // "") | last | .id // empty' <<< "$checks")"
 
-            if [[ "$python_status" == "completed" && "$javascript_status" == "completed" && -n "$check_id" ]]; then
+            if [[ -n "$check_id" ]]; then
               check="$(gh api "repos/${GITHUB_REPOSITORY}/check-runs/${check_id}")"
               status="$(jq -r '.status // empty' <<< "$check")"
               annotation_count="$(jq -r '.output.annotations_count // 0' <<< "$check")"
 
-              # The CodeQL summary check can complete early with only a configuration
-              # warning. Wait until the matching scan jobs finish and alert annotations
-              # have actually been attached to the check.
+              # The aggregate CodeQL check can finish early with only a configuration
+              # warning. Wait for the check itself to finish AND attach annotations;
+              # individual scan job names are not stable across setup modes.
               if [[ "$status" == "completed" && "$annotation_count" -gt 0 ]]; then
                 gh api -H 'Accept: application/vnd.github+json' \
                   "repos/${GITHUB_REPOSITORY}/check-runs/${check_id}/annotations?per_page=100" \
