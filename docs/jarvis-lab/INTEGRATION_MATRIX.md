@@ -196,10 +196,14 @@ types for each scenario. The guide is generated from the scenario and receipt
 contracts rather than copied into a second checklist, and always reports native
 qualification as incomplete.
 
-During capture, `python scripts/macos_agent_bench_qualify.py --scenario <id>
-receipt.json --pretty` validates one receipt object against the same strict
-schema and evaluator used by the final bundle. This fails early on mistyped or
-unsafe evidence without probing readiness or claiming native completion.
+During capture, `python scripts/macos_agent_bench_qualify.py
+--scenario-template <id> > receipt.json` creates a fail-closed envelope for one
+scenario. After replacing its placeholders with observed evidence,
+`python scripts/macos_agent_bench_qualify.py --scenario <id> receipt.json
+--pretty` verifies the envelope's contract ID and scenario ID before applying
+the same strict schema and evaluator used by the final bundle. Stale, mistyped
+or unsafe evidence therefore fails at capture time without probing readiness or
+claiming native completion.
 
 `jarvis/cu/macos_bench.py` now defines the first deterministic receipt
 contract, `physical-user-takeover`. CI can evaluate safety evidence without

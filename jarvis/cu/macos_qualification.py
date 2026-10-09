@@ -160,6 +160,17 @@ def build_macos_receipt_bundle_template() -> dict[str, Any]:
     }
 
 
+def build_macos_receipt_scenario_template(scenario_id: str) -> dict[str, Any]:
+    """Return one version-bound, evaluator-failing live receipt envelope."""
+    if scenario_id not in _RECEIPT_EVALUATORS:
+        raise ValueError(f"unknown MacAgentBench scenario: {scenario_id}")
+    return {
+        "receipt_contract_id": macos_receipt_contract_id(),
+        "scenario_id": scenario_id,
+        "receipt": build_macos_receipt_template()[scenario_id],
+    }
+
+
 def _invalid_evaluation(scenario_id: str, failure: str) -> MacAgentBenchEvaluation:
     return MacAgentBenchEvaluation(
         scenario_id=scenario_id,
@@ -213,6 +224,33 @@ def evaluate_macos_receipt(
         receipt_valid=validation_error is None,
         evaluation=evaluation,
     )
+
+
+def evaluate_macos_receipt_envelope(
+    scenario_id: str,
+    raw: object,
+) -> ScenarioQualification:
+    """Validate a version-bound single-scenario envelope and its receipt."""
+    if scenario_id not in _RECEIPT_EVALUATORS:
+        raise ValueError(f"unknown MacAgentBench scenario: {scenario_id}")
+    if not isinstance(raw, Mapping) or set(raw) != {
+        "receipt_contract_id",
+        "scenario_id",
+        "receipt",
+    }:
+        raise ValueError(
+            "single receipt JSON must contain exactly receipt_contract_id, "
+            "scenario_id and receipt"
+        )
+    envelope_scenario_id = raw["scenario_id"]
+    if type(envelope_scenario_id) is not str or envelope_scenario_id != scenario_id:
+        raise ValueError("single receipt scenario_id does not match --scenario")
+    contract_id = raw["receipt_contract_id"]
+    if type(contract_id) is not str:
+        raise ValueError("single receipt receipt_contract_id must be a string")
+    if contract_id != macos_receipt_contract_id():
+        raise ValueError("single receipt contract ID does not match the current contract")
+    return evaluate_macos_receipt(scenario_id, raw["receipt"])
 
 
 def build_macos_qualification_preflight(
@@ -352,8 +390,10 @@ __all__ = [
     "build_macos_qualification_guide",
     "build_macos_qualification_preflight",
     "build_macos_receipt_bundle_template",
+    "build_macos_receipt_scenario_template",
     "build_macos_receipt_template",
     "evaluate_macos_receipt",
+    "evaluate_macos_receipt_envelope",
     "evaluate_macos_qualification",
     "macos_receipt_contract_id",
 ]

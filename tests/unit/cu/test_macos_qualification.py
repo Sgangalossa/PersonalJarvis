@@ -6,9 +6,11 @@ from jarvis.cu.macos_qualification import (
     build_macos_qualification_guide,
     build_macos_qualification_preflight,
     build_macos_receipt_bundle_template,
+    build_macos_receipt_scenario_template,
     build_macos_receipt_template,
     evaluate_macos_qualification,
     evaluate_macos_receipt,
+    evaluate_macos_receipt_envelope,
     macos_receipt_contract_id,
 )
 from jarvis.cu.macos_readiness import MacOSReadinessReport, ReadinessCheck
@@ -211,6 +213,48 @@ def test_live_qualification_rejects_stale_receipt_contract() -> None:
     assert qualification.receipt_contract_matches is False
     assert qualification.native_qualification_complete is False
     assert all(scenario.evaluation.passed for scenario in qualification.scenarios)
+
+
+def test_single_receipt_envelope_is_bound_to_current_contract() -> None:
+    envelope = build_macos_receipt_scenario_template("semantic-target-hit")
+    envelope["receipt"] = _passing_receipts()["semantic-target-hit"]
+
+    result = evaluate_macos_receipt_envelope("semantic-target-hit", envelope)
+
+    assert result.receipt_valid is True
+    assert result.evaluation.passed is True
+
+
+def test_single_receipt_envelope_rejects_stale_contract_or_wrong_scenario() -> None:
+    envelope = build_macos_receipt_scenario_template("semantic-target-hit")
+    envelope["receipt_contract_id"] = "stale-contract"
+
+    try:
+        evaluate_macos_receipt_envelope("semantic-target-hit", envelope)
+    except ValueError as exc:
+        assert "contract ID" in str(exc)
+    else:
+        raise AssertionError("stale single-receipt contract was accepted")
+
+    envelope = build_macos_receipt_scenario_template("semantic-target-hit")
+    envelope["scenario_id"] = "stale-target-refusal"
+    try:
+        evaluate_macos_receipt_envelope("semantic-target-hit", envelope)
+    except ValueError as exc:
+        assert "scenario_id" in str(exc)
+    else:
+        raise AssertionError("mismatched single-receipt scenario was accepted")
+
+
+def test_single_receipt_template_is_fail_closed_and_version_bound() -> None:
+    envelope = build_macos_receipt_scenario_template("semantic-target-hit")
+
+    assert set(envelope) == {"receipt_contract_id", "scenario_id", "receipt"}
+    assert envelope["receipt_contract_id"] == macos_receipt_contract_id()
+    assert envelope["scenario_id"] == "semantic-target-hit"
+    result = evaluate_macos_receipt_envelope("semantic-target-hit", envelope)
+    assert result.receipt_valid is True
+    assert result.evaluation.passed is False
 
 
 def test_receipt_bundle_template_is_bound_to_current_contract() -> None:

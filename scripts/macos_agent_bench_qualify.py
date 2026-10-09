@@ -13,8 +13,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from jarvis.cu.macos_qualification import (
     build_macos_qualification_guide,
     build_macos_receipt_bundle_template,
+    build_macos_receipt_scenario_template,
     evaluate_macos_qualification,
-    evaluate_macos_receipt,
+    evaluate_macos_receipt_envelope,
 )
 from jarvis.cu.macos_readiness import probe_macos_readiness
 
@@ -76,7 +77,7 @@ async def _run_scenario(receipt_path: Path, scenario_id: str, *, pretty: bool) -
         _print({"error": f"could not read receipt JSON: {exc}"}, pretty=pretty)
         return 2
     try:
-        result = evaluate_macos_receipt(scenario_id, receipt)
+        result = evaluate_macos_receipt_envelope(scenario_id, receipt)
     except ValueError as exc:
         _print({"error": str(exc)}, pretty=pretty)
         return 2
@@ -104,13 +105,27 @@ def main() -> int:
     )
     parser.add_argument(
         "--scenario",
-        help="validate one receipt object immediately, before assembling the full bundle",
+        help="validate one version-bound receipt envelope before assembling the full bundle",
+    )
+    parser.add_argument(
+        "--scenario-template",
+        metavar="ID",
+        help="print a version-bound, fail-closed receipt envelope for one scenario",
     )
     parser.add_argument("--pretty", action="store_true", help="indent the JSON output")
     args = parser.parse_args()
-    modes = sum((args.template, args.guide, args.scenario is not None))
+    modes = sum(
+        (
+            args.template,
+            args.guide,
+            args.scenario is not None,
+            args.scenario_template is not None,
+        )
+    )
     if modes > 1:
-        parser.error("--template, --guide and --scenario are mutually exclusive")
+        parser.error(
+            "--template, --guide, --scenario and --scenario-template are mutually exclusive"
+        )
     if args.template:
         if args.receipts is not None:
             parser.error("receipts cannot be supplied with --template")
@@ -121,12 +136,23 @@ def main() -> int:
             parser.error("receipts cannot be supplied with --guide")
         _print(build_macos_qualification_guide(), pretty=True)
         return 0
+    if args.scenario_template is not None:
+        if args.receipts is not None:
+            parser.error("receipts cannot be supplied with --scenario-template")
+        try:
+            payload = build_macos_receipt_scenario_template(args.scenario_template)
+        except ValueError as exc:
+            parser.error(str(exc))
+        _print(payload, pretty=True)
+        return 0
     if args.scenario is not None:
         if args.receipts is None:
             parser.error("receipts is required with --scenario")
         return asyncio.run(_run_scenario(args.receipts, args.scenario, pretty=args.pretty))
     if args.receipts is None:
-        parser.error("receipts is required unless --template or --guide is used")
+        parser.error(
+            "receipts is required unless --template, --guide or --scenario-template is used"
+        )
     return asyncio.run(_run(args.receipts, pretty=args.pretty))
 
 
