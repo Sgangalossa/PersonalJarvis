@@ -221,7 +221,7 @@ def test_gemini_offers_both_aistudio_and_vertex() -> None:
         assert "vertex" in alt.label.lower()
         assert alt.billing == "api"
         assert alt.credential_help
-        assert alt.dashboard_url and urlsplit(alt.dashboard_url).hostname == "cloud.google.com"
+        assert alt.dashboard_url and urlsplit(alt.dashboard_url).hostname == "console.cloud.google.com"
 
 
 def test_only_google_provider_families_have_alt_credentials() -> None:
