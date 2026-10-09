@@ -145,9 +145,10 @@ def resolve_frontier_brain(
         )
         return brain
 
+    last_error_type = type(last_err).__name__ if last_err is not None else "none"
     raise RuntimeError(
         "resolve_frontier_brain: all stages of the fallback chain failed. "
-        f"Last error: {last_err!r}. Chain: {chain}"
+        f"Last error type: {last_error_type}. Chain: {chain}"
     )
 
 
@@ -250,8 +251,11 @@ def resolve_quality_brain(
     _ensure_bus_subscription(bus)
     try:
         chain = list(_resolve_chain(config))
-    except Exception:  # noqa: BLE001 - a config problem must not kill the caller
-        log.info("resolve_quality_brain: chain could not be built", exc_info=True)
+    except Exception as exc:  # noqa: BLE001 - a config problem must not kill the caller
+        log.info(
+            "resolve_quality_brain: chain could not be built (%s)",
+            type(exc).__name__,
+        )
         return None
 
     for provider, model in chain:

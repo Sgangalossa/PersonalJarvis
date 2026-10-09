@@ -13411,10 +13411,11 @@ class BrainManager:
                     "persisted brain.primary.",
                     previous_active, provider,
                 )
-            except Exception:  # noqa: BLE001 — a subscriber must never kill the bus (AP-18)
+            except Exception as exc:  # noqa: BLE001 — a subscriber must never kill the bus (AP-18)
                 log.warning(
-                    "auto-activate on key-set failed for provider %r",
-                    provider, exc_info=True,
+                    "auto-activate on key-set failed for provider %r (%s)",
+                    provider,
+                    type(exc).__name__,
                 )
 
         target_bus.subscribe(SecretConfigured, _on_secret_configured)
@@ -14167,7 +14168,12 @@ def _keyless_provider_is_rescued_by_oauth(provider_name: str) -> bool:
 
         return bool(_keyless_credential_present(provider_name))
     except Exception as exc:  # noqa: BLE001 — a failed probe is not a credential
-        log.debug("Keyless-credential rescue probe failed for %s: %s", provider_name, exc)
+        # Probe exceptions may include authentication details; log only the type.
+        log.debug(
+            "Keyless-credential rescue probe failed for %s (%s)",
+            provider_name,
+            type(exc).__name__,
+        )
         return False
 
 
