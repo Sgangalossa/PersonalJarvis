@@ -19,6 +19,7 @@ import hashlib
 import importlib.util
 import json
 import logging
+import os
 import re
 import sys
 import threading
@@ -32,7 +33,6 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from jarvis.core.config import DATA_DIR
-from jarvis.core.path_safety import UnsafePathError, safe_child
 from jarvis.society.figure_sharing import PUBLIC_FIGURE_LICENSES, SharedFigureDraft
 
 log = logging.getLogger(__name__)
@@ -214,14 +214,15 @@ def _figure_path(file_name: str) -> Path | None:
     """
     if _GLB_FILE_NAME.fullmatch(file_name) is None:
         return None
-    root = figures_dir()
-    candidate = root / file_name
-    if candidate.is_symlink():
-        return None
     try:
-        return safe_child(root, file_name)
-    except UnsafePathError:  # an escaping name is simply not a figure; the route answers 404
+        root = os.path.realpath(os.fspath(figures_dir()))
+        target = os.path.realpath(os.path.join(root, file_name))
+        prefix = root if root.endswith(os.sep) else root + os.sep
+        if target.startswith(prefix) and os.path.isfile(target):
+            return Path(target)
+    except (OSError, TypeError, ValueError):
         return None
+    return None
 
 
 def _load_gate():
@@ -242,15 +243,16 @@ def _slug(name: str) -> str:
 
 
 def _extras(path: Path) -> dict[str, Any]:
-    # Do not let a caller-supplied Path flow straight to the GLB parser.
-    safe_path = _figure_path(path.name)
-    if safe_path is None or not safe_path.is_file():
-        return {}
+    # Treat the GLB path as untrusted until its resolved location is confined.
     try:
-        if path.resolve() != safe_path.resolve():
+        root = os.path.realpath(os.fspath(figures_dir()))
+        target = os.path.realpath(os.fspath(path))
+        prefix = root if root.endswith(os.sep) else root + os.sep
+        if not target.startswith(prefix) or not os.path.isfile(target):
             return {}
-    except (OSError, RuntimeError, ValueError):
+    except (OSError, TypeError, ValueError):
         return {}
+    safe_path = Path(target)
     gate = _load_gate()
     if gate is None:
         return {}
@@ -263,15 +265,15 @@ def _extras(path: Path) -> dict[str, Any]:
 
 
 def _describe(path: Path) -> dict[str, Any]:
-    safe_path = _figure_path(path.name)
-    if safe_path is None or not safe_path.is_file():
-        raise ValueError("not a stored figure")
     try:
-        matches_stored_path = path.resolve() == safe_path.resolve()
-    except (OSError, RuntimeError, ValueError) as exc:
+        root = os.path.realpath(os.fspath(figures_dir()))
+        target = os.path.realpath(os.fspath(path))
+        prefix = root if root.endswith(os.sep) else root + os.sep
+        if not target.startswith(prefix) or not os.path.isfile(target):
+            raise ValueError("not a stored figure")
+    except (OSError, TypeError, ValueError) as exc:
         raise ValueError("not a stored figure") from exc
-    if not matches_stored_path:
-        raise ValueError("not a stored figure")
+    safe_path = Path(target)
     extras = _extras(safe_path)
     return {
         "id": safe_path.stem,
@@ -294,15 +296,10 @@ async def list_figures() -> dict[str, Any]:
     def _describe_candidates() -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for candidate in sorted(folder.glob("*.glb")):
-            path = _figure_path(candidate.name)
-            if path is None or not path.is_file():
-                continue
             try:
-                if candidate.resolve() != path.resolve():
-                    continue
-            except (OSError, RuntimeError, ValueError):
+                rows.append(_describe(candidate))
+            except (OSError, ValueError):
                 continue
-            rows.append(_describe(path))
         return rows
 
     rows = await run_in_threadpool(_describe_candidates)
@@ -475,11 +472,13 @@ async def delist_shared_figure(share_id: str) -> dict[str, Any]:
 def get_figure(file_name: str) -> FileResponse:
     if _GLB_FILE_NAME.fullmatch(file_name) is None:
         raise HTTPException(404, "no such figure")
-    path = _figure_path(file_name)
-    if path is None or not path.is_file():
+    root = os.path.realpath(os.fspath(figures_dir()))
+    target = os.path.realpath(os.path.join(root, file_name))
+    prefix = root if root.endswith(os.sep) else root + os.sep
+    if not target.startswith(prefix) or not os.path.isfile(target):
         raise HTTPException(404, "no such figure")
     return FileResponse(
-        path, media_type="model/gltf-binary", headers={"Cache-Control": "public, max-age=31536000"}
+        target, media_type="model/gltf-binary", headers={"Cache-Control": "public, max-age=31536000"}
     )
 
 
@@ -487,8 +486,10 @@ def get_figure(file_name: str) -> FileResponse:
 async def delete_figure(file_name: str) -> dict[str, Any]:
     if _GLB_FILE_NAME.fullmatch(file_name) is None:
         raise HTTPException(404, "no such figure")
-    path = _figure_path(file_name)
-    if path is None or not path.is_file():
+    root = os.path.realpath(os.fspath(figures_dir()))
+    target = os.path.realpath(os.path.join(root, file_name))
+    prefix = root if root.endswith(os.sep) else root + os.sep
+    if not target.startswith(prefix) or not os.path.isfile(target):
         raise HTTPException(404, "no such figure")
-    await run_in_threadpool(path.unlink)
+    await run_in_threadpool(Path(target).unlink)
     return {"deleted": file_name}

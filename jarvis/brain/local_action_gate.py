@@ -273,7 +273,7 @@ _ASSISTANT_IMPERATIVE_RE = re.compile(
 #: carries one. Same token set as ``tool_use_loop._INDICATIVE_SUBJECT_RE`` so
 #: the two guards classify the same sentence the same way.
 _INDICATIVE_SUBJECT_AFTER_RE = re.compile(
-    r"\s*(?:ich|man|wir|i|we|you|yo|uno|io|noi)\b",  # i18n-allow
+    r"\s{0,32}(?:ich|man|wir|i|we|you|yo|uno|io|noi)\b",  # i18n-allow
     re.IGNORECASE,
 )
 #: English (and the German infinitive marker) put the subject in FRONT of the
