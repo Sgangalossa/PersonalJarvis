@@ -55,6 +55,26 @@ def test_chain_keeps_the_voice_key_when_nothing_else_can_answer() -> None:
     assert kept == chain
 
 
+def test_subscription_probe_failure_does_not_log_exception_details(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import jarvis.brain.manager as manager
+    import jarvis.ui.web.provider_spec as provider_spec
+
+    monkeypatch.setattr(provider_spec, "PROVIDERS", [SimpleNamespace(id="broken")])
+    monkeypatch.setattr(provider_spec, "provider_billing", lambda _spec: "subscription")
+
+    def _fail(_provider: str) -> bool:
+        raise RuntimeError("token=do-not-log-this")
+
+    monkeypatch.setattr(manager, "_keyless_provider_is_rescued_by_oauth", _fail)
+    caplog.set_level("DEBUG", logger="jarvis.brain.voice_key")
+
+    assert not voice_key._signed_in_on_subscription("broken")
+    assert "token=do-not-log-this" not in caplog.text
+    assert "RuntimeError" in caplog.text
+
+
 def test_chain_keeps_a_named_entry_and_subscription_brains(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
