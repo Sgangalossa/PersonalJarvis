@@ -220,7 +220,7 @@ def _figure_path(file_name: str) -> Path | None:
         prefix = root if root.endswith(os.sep) else root + os.sep
         if target.startswith(prefix) and os.path.isfile(target):
             return Path(target)
-    except (OSError, TypeError, ValueError):
+    except (OSError, TypeError, ValueError):  # Inaccessible or escaping files are treated as absent.
         return None
     return None
 
@@ -250,7 +250,7 @@ def _extras(path: Path) -> dict[str, Any]:
         prefix = root if root.endswith(os.sep) else root + os.sep
         if not target.startswith(prefix) or not os.path.isfile(target):
             return {}
-    except (OSError, TypeError, ValueError):
+    except (OSError, TypeError, ValueError):  # Unsafe paths must not reach the optional metadata parser.
         return {}
     safe_path = Path(target)
     gate = _load_gate()
@@ -259,7 +259,7 @@ def _extras(path: Path) -> dict[str, Any]:
     tools = gate._load_tools()
     try:
         doc = tools.read_glb(safe_path).doc
-    except (ValueError, OSError):
+    except (ValueError, OSError):  # Invalid GLB metadata is optional for the list view.
         return {}
     return (doc.get("asset", {}).get("extras") or {}).get("jarvis_figure") or {}
 
@@ -298,7 +298,7 @@ async def list_figures() -> dict[str, Any]:
         for candidate in sorted(folder.glob("*.glb")):
             try:
                 rows.append(_describe(candidate))
-            except (OSError, ValueError):
+            except (OSError, ValueError):  # Skip malformed candidates and keep the list endpoint available.
                 continue
         return rows
 
