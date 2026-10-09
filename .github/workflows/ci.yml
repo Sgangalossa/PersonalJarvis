@@ -684,7 +684,9 @@ jobs:
     needs: detect
     if: needs.detect.outputs.realtime == 'true'
     runs-on: ubuntu-latest
-    container: python:3.11-slim
+    # Public ECR mirrors the Docker Official Image without Docker Hub's shared
+    # anonymous-pull quota on hosted runners.
+    container: public.ecr.aws/docker/library/python:3.11-slim
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
