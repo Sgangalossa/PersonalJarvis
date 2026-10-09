@@ -388,14 +388,30 @@ def _normalize_remote(url: str) -> str:
 
 
 def _remote_is_official(url: str) -> bool:
-    """True only if ``url`` resolves to exactly the official ``owner/name``.
+    """Accept only the exact official repository on GitHub over HTTPS or SSH.
 
-    Must MATCH the last two path segments, not merely contain the slug — so a
-    look-alike fork (``.../PersonalJarvis/PersonalJarvisEvil``) is rejected.
+    Matching only a path suffix is unsafe: a repository on another host can
+    use the same owner/name tail and would otherwise pass the updater's trust
+    check. Local-path remotes also cannot prove the source is the official repo,
+    so they fail closed.
     """
-    norm = _normalize_remote(url).lower()
-    slug = _OFFICIAL_REPO_SLUG.lower()
-    return norm == slug or norm.endswith("/" + slug)
+    candidate = url.strip()
+    lowered = candidate.lower()
+    prefixes = (
+        "https://github.com/",
+        "ssh://git@github.com/",
+        "git@github.com:",
+    )
+    prefix = next((item for item in prefixes if lowered.startswith(item)), None)
+    if prefix is None:
+        return False
+
+    repository = candidate[len(prefix):].rstrip("/")
+    if not repository or "?" in repository or "#" in repository:
+        return False
+    if repository.lower().endswith(".git"):
+        repository = repository[:-4]
+    return repository.lower() == _OFFICIAL_REPO_SLUG.lower()
 
 
 async def _resolve_managed_repo() -> Path | None:
