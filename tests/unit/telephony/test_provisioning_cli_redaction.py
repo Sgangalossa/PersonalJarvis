@@ -10,7 +10,7 @@ import pytest
 import scripts.telephony_provision as cli
 
 
-@pytest.mark.parametrize("command", ["buy", "set-webhook", "inspect"])
+@pytest.mark.parametrize("command", ["buy", "set_webhook", "inspect"])
 def test_webhook_query_secrets_are_redacted_from_output(command, monkeypatch, capsys):
     secret = "supersecretvalue123"
     owned = SimpleNamespace(
