@@ -131,3 +131,5 @@ Next remote-safe task: finish the durable handoff audit at room RESULT projectio
 - Live receipts can now be validated one scenario at a time with `macos_agent_bench_qualify.py --scenario <id> receipt.json`. This catches schema drift and failed safety criteria at capture time, before the nine-receipt bundle is assembled; it does not replace the final ready-Mac qualification.
 - CodeQL telephony hardening: provisioning CLI success and lookup output no longer emits phone numbers, provider resource SIDs or webhook URLs. Focused tests cover all three flagged commands plus the not-owned path; CI qualification is pending.
 - CodeQL opener review: desktop file dispatch already uses a fixed executable, an absolute separate argv item and `shell=False`; the data-flow alert is documented at the sink rather than weakening the safe direct-launch contract.
+
+- CodeQL secret-diagnostic hardening: provider probe and key-set recovery failures now emit constant diagnostics only. Secret-derived provider identifiers, exception types, messages and tracebacks stay out of logs; focused tests cover the voice-key, keyless-rescue and auto-activation paths. CI qualification is pending.

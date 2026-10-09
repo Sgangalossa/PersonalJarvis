@@ -71,8 +71,10 @@ def test_subscription_probe_failure_does_not_log_exception_details(
     caplog.set_level("DEBUG", logger="jarvis.brain.voice_key")
 
     assert not voice_key._signed_in_on_subscription("broken")
+    assert "voice_key: login probe failed" in caplog.text
     assert "token=do-not-log-this" not in caplog.text
-    assert "RuntimeError" in caplog.text
+    assert "broken" not in caplog.text
+    assert "RuntimeError" not in caplog.text
 
 
 def test_chain_keeps_a_named_entry_and_subscription_brains(

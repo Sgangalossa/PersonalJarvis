@@ -13411,12 +13411,10 @@ class BrainManager:
                     "persisted brain.primary.",
                     previous_active, provider,
                 )
-            except Exception as exc:  # noqa: BLE001 — a subscriber must never kill the bus (AP-18)
-                log.warning(
-                    "auto-activate on key-set failed for provider %r (%s)",
-                    provider,
-                    type(exc).__name__,
-                )
+            except Exception:  # noqa: BLE001 — a subscriber must never kill the bus (AP-18)
+                # SecretConfigured-derived provider data and exception metadata
+                # stay out of diagnostics; the bus must still fail closed.
+                log.warning("auto-activate on key-set failed")
 
         target_bus.subscribe(SecretConfigured, _on_secret_configured)
 
@@ -14167,13 +14165,9 @@ def _keyless_provider_is_rescued_by_oauth(provider_name: str) -> bool:
         from jarvis.brain.app_control import _keyless_credential_present
 
         return bool(_keyless_credential_present(provider_name))
-    except Exception as exc:  # noqa: BLE001 — a failed probe is not a credential
-        # Probe exceptions may include authentication details; log only the type.
-        log.debug(
-            "Keyless-credential rescue probe failed for %s (%s)",
-            provider_name,
-            type(exc).__name__,
-        )
+    except Exception:  # noqa: BLE001 — a failed probe is not a credential
+        # Provider identity and exception metadata may be secret-tainted.
+        log.debug("Keyless-credential rescue probe failed")
         return False
 
 

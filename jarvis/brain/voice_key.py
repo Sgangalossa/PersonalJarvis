@@ -79,8 +79,8 @@ def _signed_in_on_subscription(brain_provider: str) -> bool:
     """
     try:
         from jarvis.ui.web.provider_spec import PROVIDERS, provider_billing
-    except Exception as exc:  # noqa: BLE001 - no cards means no subscription to protect
-        log.debug("voice_key: provider cards unavailable (%s)", type(exc).__name__)
+    except Exception:  # noqa: BLE001 - no cards means no subscription to protect
+        log.debug("voice_key: provider cards unavailable")
         return False
     if not any(
         spec.id == brain_provider and provider_billing(spec).startswith("subscription")
@@ -91,13 +91,9 @@ def _signed_in_on_subscription(brain_provider: str) -> bool:
         from jarvis.brain.manager import _keyless_provider_is_rescued_by_oauth
 
         return _keyless_provider_is_rescued_by_oauth(brain_provider)
-    except Exception as exc:  # noqa: BLE001 - a failed probe is not a login
-        # The exception text/traceback may contain authentication material.
-        log.debug(
-            "voice_key: login probe failed for %s (%s)",
-            brain_provider,
-            type(exc).__name__,
-        )
+    except Exception:  # noqa: BLE001 - a failed probe is not a login
+        # Provider identity and exception metadata may be secret-tainted.
+        log.debug("voice_key: login probe failed")
         return False
 
 
