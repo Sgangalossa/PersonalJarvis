@@ -196,6 +196,11 @@ types for each scenario. The guide is generated from the scenario and receipt
 contracts rather than copied into a second checklist, and always reports native
 qualification as incomplete.
 
+During capture, `python scripts/macos_agent_bench_qualify.py --scenario <id>
+receipt.json --pretty` validates one receipt object against the same strict
+schema and evaluator used by the final bundle. This fails early on mistyped or
+unsafe evidence without probing readiness or claiming native completion.
+
 `jarvis/cu/macos_bench.py` now defines the first deterministic receipt
 contract, `physical-user-takeover`. CI can evaluate safety evidence without
 posting input: takeover detected and zero synthetic events after detection.

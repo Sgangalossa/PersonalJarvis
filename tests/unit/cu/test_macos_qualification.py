@@ -8,6 +8,7 @@ from jarvis.cu.macos_qualification import (
     build_macos_receipt_bundle_template,
     build_macos_receipt_template,
     evaluate_macos_qualification,
+    evaluate_macos_receipt,
     macos_receipt_contract_id,
 )
 from jarvis.cu.macos_readiness import MacOSReadinessReport, ReadinessCheck
@@ -175,6 +176,29 @@ def test_live_qualification_requires_every_valid_passing_receipt() -> None:
     assert qualification.unexpected_receipt_ids == ()
     assert all(scenario.receipt_valid for scenario in qualification.scenarios)
     assert all(scenario.evaluation.passed for scenario in qualification.scenarios)
+
+
+def test_single_receipt_can_be_validated_before_bundle_assembly() -> None:
+    receipt = _passing_receipts()["semantic-target-hit"]
+
+    result = evaluate_macos_receipt("semantic-target-hit", receipt)
+
+    assert result.receipt_valid is True
+    assert result.evaluation.passed is True
+
+
+def test_single_receipt_validation_rejects_schema_drift() -> None:
+    receipt = _passing_receipts()["semantic-target-hit"]
+    assert isinstance(receipt, dict)
+    receipt["unexpected"] = True
+
+    result = evaluate_macos_receipt("semantic-target-hit", receipt)
+
+    assert result.receipt_valid is False
+    assert result.evaluation.passed is False
+    assert result.evaluation.failures == (
+        "live receipt has unexpected field(s): unexpected",
+    )
 
 
 def test_live_qualification_rejects_stale_receipt_contract() -> None:

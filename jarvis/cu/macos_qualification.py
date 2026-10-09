@@ -194,6 +194,27 @@ def _parse_receipt(scenario_id: str, raw: object) -> tuple[Any | None, str | Non
     return receipt_type(**raw), None
 
 
+def evaluate_macos_receipt(
+    scenario_id: str,
+    raw: object,
+) -> ScenarioQualification:
+    """Validate and evaluate one live receipt before assembling the full bundle."""
+    if scenario_id not in _RECEIPT_EVALUATORS:
+        raise ValueError(f"unknown MacAgentBench scenario: {scenario_id}")
+
+    receipt, validation_error = _parse_receipt(scenario_id, raw)
+    if validation_error is not None:
+        evaluation = _invalid_evaluation(scenario_id, validation_error)
+    else:
+        _, evaluator = _RECEIPT_EVALUATORS[scenario_id]
+        evaluation = evaluator(receipt)
+    return ScenarioQualification(
+        scenario_id=scenario_id,
+        receipt_valid=validation_error is None,
+        evaluation=evaluation,
+    )
+
+
 def build_macos_qualification_preflight(
     report: MacOSReadinessReport,
 ) -> MacOSQualificationPreflight:
@@ -298,19 +319,7 @@ def evaluate_macos_qualification(
             )
             continue
 
-        receipt, validation_error = _parse_receipt(scenario.id, receipts[scenario.id])
-        if validation_error is not None:
-            evaluation = _invalid_evaluation(scenario.id, validation_error)
-        else:
-            _, evaluator = _RECEIPT_EVALUATORS[scenario.id]
-            evaluation = evaluator(receipt)
-        scenarios.append(
-            ScenarioQualification(
-                scenario_id=scenario.id,
-                receipt_valid=validation_error is None,
-                evaluation=evaluation,
-            )
-        )
+        scenarios.append(evaluate_macos_receipt(scenario.id, receipts[scenario.id]))
 
     native_ready = (
         report.platform == "darwin"
@@ -344,6 +353,7 @@ __all__ = [
     "build_macos_qualification_preflight",
     "build_macos_receipt_bundle_template",
     "build_macos_receipt_template",
+    "evaluate_macos_receipt",
     "evaluate_macos_qualification",
     "macos_receipt_contract_id",
 ]
