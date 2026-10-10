@@ -134,9 +134,8 @@ def resolve_frontier_brain(
         except Exception as exc:  # noqa: BLE001
             last_err = exc
             log.info(
-                "resolve_frontier_brain: %s/%s not instantiable (%s) — "
-                "trying next stage of the fallback chain",
-                provider, model or "<default>", 'provider-error',
+                "resolve_frontier_brain: provider not instantiable (%s)",
+                'provider-error',
             )
             continue
         _cache[cache_key] = brain
@@ -191,8 +190,8 @@ def frontier_brain_candidates(
                 )
             except Exception as exc:  # noqa: BLE001
                 log.info(
-                    "frontier_brain_candidates: %s/%s not instantiable (%s)",
-                    provider, model or "<default>", 'provider-error',
+                    "frontier_brain_candidates: provider not instantiable (%s)",
+                    'provider-error',
                 )
                 continue
             _cache[cache_key] = brain
@@ -275,8 +274,8 @@ def resolve_quality_brain(
             )
         except Exception as exc:  # noqa: BLE001
             log.info(
-                "resolve_quality_brain: %s/%s not instantiable (%s)",
-                provider, model or "<default>", 'provider-error',
+                "resolve_quality_brain: provider not instantiable (%s)",
+                'provider-error',
             )
             continue
         _cache[cache_key] = brain
@@ -411,8 +410,8 @@ def resolve_vision_brain(
                 )
             except Exception as exc:  # noqa: BLE001
                 log.info(
-                    "resolve_vision_brain: %s/%s not instantiable (%s)",
-                    provider, model or "<default>", 'provider-error',
+                    "resolve_vision_brain: provider not instantiable (%s)",
+                    'provider-error',
                 )
                 continue
             _cache[cache_key] = brain
