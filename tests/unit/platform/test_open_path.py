@@ -219,6 +219,18 @@ def test_open_url_linux_uses_xdg_open():
         popen.assert_not_called()  # no double-open when xdg-open succeeds
 
 
+def test_open_url_does_not_log_url_query_parameters(caplog):
+    secret_url = "https://accounts.google.com/oauth?state=private-state-token&code=private-code"
+    with patch.object(op, "detect_capabilities", return_value=_caps()), \
+         patch.object(op, "detect_platform", return_value="linux"), \
+         patch.object(op.subprocess, "run", return_value=_ok()):
+        assert op.open_url(secret_url) is True
+
+    assert "private-state-token" not in caplog.text
+    assert "private-code" not in caplog.text
+    assert secret_url not in caplog.text
+
+
 def test_open_url_linux_falls_back_to_browser_bin_when_xdg_open_fails():
     # xdg-open exits non-zero (no handler) -> launch a real browser binary on PATH.
     def _which(binname):

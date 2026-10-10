@@ -287,10 +287,9 @@ def _open_url_windows(url: str) -> bool:
             subprocess.Popen(  # noqa: S603
                 [exe, url], creationflags=NO_WINDOW_CREATIONFLAGS, close_fds=True
             )
-            # Log only scheme://host at INFO — the full URL carries the OAuth
-            # ``state`` (a CSRF token) and ephemeral redirect_uri; keep it at DEBUG.
+            # URLs may contain OAuth state, redirect URIs, or other secrets.
+            # Log only the scheme/host, never the full URL.
             log.info("open_url: launched %s -> %s", exe, host)
-            log.debug("open_url: full URL %s", url)
             return True
         except OSError as exc:
             log.warning("open_url: %s failed (%s); trying next candidate", exe, exc)
@@ -365,7 +364,6 @@ def _open_url_macos(url: str) -> bool:
     host = urlparse(url).netloc
     if _run_opener_checked(["open", url]):
         log.info("open_url: macOS launched default browser -> %s", host)
-        log.debug("open_url: full URL %s", url)
         return True
     for app in _MACOS_BROWSER_APPS:
         if _run_opener_checked(["open", "-a", app, url]):
@@ -385,7 +383,6 @@ def _open_url_linux(url: str) -> bool:
     host = urlparse(url).netloc
     if _run_opener_checked(["xdg-open", url]):
         log.info("open_url: Linux launched default browser -> %s", host)
-        log.debug("open_url: full URL %s", url)
         return True
     for binname in _LINUX_BROWSER_BINS:
         exe = shutil.which(binname)
