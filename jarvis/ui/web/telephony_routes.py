@@ -844,7 +844,7 @@ async def media_socket(ws: WebSocket) -> None:
                     try:
                         await sess.speak_intro()
                     except Exception as exc:  # noqa: BLE001
-                        log.debug("telephony greeting failed: %s", exc)
+                        log.debug("telephony greeting failed (%s)", type(exc).__name__)
 
                 _asyncio.create_task(_greet())
                 continue
@@ -896,7 +896,7 @@ async def media_socket(ws: WebSocket) -> None:
                     )
                 )
             except Exception as exc:  # noqa: BLE001
-                log.debug("telephony record_call failed: %s", exc)
+                log.debug("telephony record_call failed (%s)", type(exc).__name__)
         try:
             await ws.close()
         except Exception:  # noqa: BLE001, S110 - socket may already be closed
@@ -953,7 +953,7 @@ def _build_session(
         tts = build_tts_from_config(cfg.tts)
         brain = build_default_brain(bus=bus, tier="router")
     except Exception as exc:  # noqa: BLE001
-        log.warning("telephony: speech stack build failed: %s", exc)
+        log.warning("telephony: speech stack build failed (%s)", type(exc).__name__)
         return None
 
     try:
