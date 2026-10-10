@@ -43,11 +43,15 @@ def test_windows_job_breakaway_policy(monkeypatch, allow_breakaway, expected_fla
         configured_flags.append(info.BasicLimitInformation.LimitFlags)
         return 1
 
+    terminated = []
     kernel32 = SimpleNamespace(
         CreateJobObjectW=_FakeFunction(lambda *_args: 1),
         SetInformationJobObject=_FakeFunction(set_information),
         OpenProcess=_FakeFunction(lambda *_args: 1),
         AssignProcessToJobObject=_FakeFunction(lambda *_args: 1),
+        TerminateJobObject=_FakeFunction(
+            lambda handle, exit_code: terminated.append((handle, exit_code)) or 1
+        ),
         CloseHandle=_FakeFunction(lambda *_args: 1),
     )
     monkeypatch.setattr(process_tree, "sys", SimpleNamespace(platform="win32"))
@@ -59,3 +63,4 @@ def test_windows_job_breakaway_policy(monkeypatch, allow_breakaway, expected_fla
     tree.close()
 
     assert configured_flags == [expected_flags]
+    assert terminated == [(1, 1)]

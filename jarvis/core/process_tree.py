@@ -142,6 +142,8 @@ class _WindowsJob:
         kernel32.OpenProcess.restype = wintypes.HANDLE
         kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
         kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+        kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        kernel32.TerminateJobObject.restype = wintypes.BOOL
         kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
         kernel32.CloseHandle.restype = wintypes.BOOL
 
@@ -193,6 +195,15 @@ class _WindowsJob:
         # Flagged before the call, so a failing CloseHandle cannot turn into a
         # retry loop that leaks a handle per attempt.
         self._closed = True
+        # KILL_ON_JOB_CLOSE is the crash-safe fallback, but an explicit
+        # termination removes the observable race between closing the handle
+        # and Windows asynchronously reaping Chromium descendants.
+        if not self._kernel32.TerminateJobObject(self._handle, 1):
+            logger.debug(
+                "Terminating the job object for {} failed — closing its handle: {}",
+                self._name,
+                ctypes.WinError(ctypes.get_last_error()),
+            )
         if not self._kernel32.CloseHandle(self._handle):
             logger.debug(
                 "Closing the job object for {} failed — its tree may survive: {}",
