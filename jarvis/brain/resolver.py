@@ -136,7 +136,7 @@ def resolve_frontier_brain(
             log.info(
                 "resolve_frontier_brain: %s/%s not instantiable (%s) — "
                 "trying next stage of the fallback chain",
-                provider, model or "<default>", type(exc).__name__,
+                provider, model or "<default>", 'provider-error',
             )
             continue
         _cache[cache_key] = brain
@@ -192,7 +192,7 @@ def frontier_brain_candidates(
             except Exception as exc:  # noqa: BLE001
                 log.info(
                     "frontier_brain_candidates: %s/%s not instantiable (%s)",
-                    provider, model or "<default>", type(exc).__name__,
+                    provider, model or "<default>", 'provider-error',
                 )
                 continue
             _cache[cache_key] = brain
@@ -254,7 +254,7 @@ def resolve_quality_brain(
     except Exception as exc:  # noqa: BLE001 - a config problem must not kill the caller
         log.info(
             "resolve_quality_brain: chain could not be built (%s)",
-            type(exc).__name__,
+            'provider-error',
         )
         return None
 
@@ -276,7 +276,7 @@ def resolve_quality_brain(
         except Exception as exc:  # noqa: BLE001
             log.info(
                 "resolve_quality_brain: %s/%s not instantiable (%s)",
-                provider, model or "<default>", type(exc).__name__,
+                provider, model or "<default>", 'provider-error',
             )
             continue
         _cache[cache_key] = brain
@@ -365,7 +365,7 @@ def resolve_tool_model_brain(
     except Exception as exc:  # noqa: BLE001 - a caller must degrade, not crash
         log.info(
             "resolve_tool_model_brain: %s/%s not instantiable (%s)",
-            provider, model or "<default>", type(exc).__name__,
+            provider, model or "<default>", 'provider-error',
         )
         return None
     _cache[cache_key] = brain
@@ -412,7 +412,7 @@ def resolve_vision_brain(
             except Exception as exc:  # noqa: BLE001
                 log.info(
                     "resolve_vision_brain: %s/%s not instantiable (%s)",
-                    provider, model or "<default>", type(exc).__name__,
+                    provider, model or "<default>", 'provider-error',
                 )
                 continue
             _cache[cache_key] = brain
@@ -561,7 +561,7 @@ def resolve_subscription_brain(
             log.info(
                 "resolve_subscription_brain: %s not instantiable (%s)",
                 provider,
-                type(exc).__name__,
+                'provider-error',
             )
             continue
         log.info("resolve_subscription_brain: writing on %s", provider)
