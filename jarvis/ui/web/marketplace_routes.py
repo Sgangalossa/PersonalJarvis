@@ -1197,8 +1197,9 @@ async def _download_text(raw_url: str, *, transport: Any = None) -> tuple[str, b
                     total += len(chunk)
                     chunks.append(chunk)
         except httpx.HTTPError as exc:
+            log.warning("Community package download failed (%s)", type(exc).__name__)
             raise HTTPException(
-                status_code=502, detail=f"download from {raw_url} failed: {exc}"
+                status_code=502, detail="Community package download failed."
             ) from exc
 
     # errors="replace": one broken byte must not hide the whole file, which is
