@@ -68,7 +68,7 @@ describe("MainView — detached coding view", () => {
     render(<MainView />);
     setStore({ activeSection: "agentic-ide" });
     await screen.findByTestId("ide-stub");
-    expect(ide.mounts).toBe(1);
+    await waitFor(() => expect(ide.mounts).toBe(1));
 
     // The desktop shell reports the view now lives in its own window.
     setStore({ detachedViews: ["agentic-ide"] });
@@ -109,7 +109,7 @@ describe("MainView — detached coding view", () => {
     setStore({ detachedViews: [] });
 
     await screen.findByTestId("ide-stub");
-    expect(ide.mounts).toBe(1);
+    await waitFor(() => expect(ide.mounts).toBe(1));
   });
 
   it("keeps non-coding sections rendering while the IDE is detached", async () => {
