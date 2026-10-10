@@ -111,7 +111,6 @@ def test_init_capture_refuses_to_overwrite_existing_directory(
     assert "refusing to overwrite" in json.loads(capsys.readouterr().out)["error"]
 
 
-
 @pytest.mark.asyncio
 async def test_capture_status_reports_all_placeholder_failures(
     tmp_path, capsys
