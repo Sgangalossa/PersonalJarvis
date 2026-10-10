@@ -454,7 +454,7 @@ def stop_server() -> tuple[bool, str]:
             "If a server is still answering, it was started elsewhere."
         )
     except psutil.Error as exc:
-        return False, f"Could not inspect the Ollama process Jarvis started ({exc})."
+        return False, "Could not inspect the Ollama process Jarvis started. Check the application log for details."
     if not _process_is_ollama(proc):
         # The pid was recycled by the OS for an unrelated program.
         _forget_pid()
@@ -474,7 +474,7 @@ def stop_server() -> tuple[bool, str]:
         # It exited between the check and the signal — that IS the goal.
         log.debug("ollama-runtime: pid %s exited before the signal", pid)
     except psutil.Error as exc:
-        return False, f"Could not stop Ollama (pid {pid}): {exc}."
+        return False, "Could not stop Ollama. Check the application log for details."
     _forget_pid()
     return True, "Ollama stopped."
 
