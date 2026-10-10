@@ -10682,12 +10682,9 @@ class RealtimeVoiceSession:
             if not swapped:
                 return
             log.warning(
-                "realtime[%s] readback named %s, which the trusted result does "
-                "not mention — spoken: %s | result: %s",
+                "realtime[%s] readback identifier swap detected (%d item(s))",
                 self.session_id,
-                ", ".join(swapped),
-                safe_preview(rendering, max_chars=200),
-                safe_preview(trusted, max_chars=200),
+                len(swapped),
             )
             await self._publish_error(
                 "readback_identifier_swap",
