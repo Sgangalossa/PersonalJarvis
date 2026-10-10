@@ -728,12 +728,11 @@ def _run_command(cmd: list[str], *, timeout: int) -> None:
         timeout=timeout,
         creationflags=NO_WINDOW_CREATIONFLAGS,
     )
-    tail = (result.stdout or "") + (result.stderr or "")
-    for line in tail.strip().splitlines()[-5:]:
-        with _LOCK:
-            _STATE.log_tail.append(line[:200])
+    # Installer output is not safe to expose through the polling API: package
+    # managers and installers can echo paths, environment details, or credentials.
+    # Keep only the exit status; progress labels are recorded separately by _set.
     if result.returncode != 0:
-        raise RuntimeError(f"step failed (exit {result.returncode}): {' '.join(cmd[:2])}…")
+        raise RuntimeError(f"Installer step failed (exit {result.returncode}).")
 
 
 def _download(url: str, target: Path) -> None:
