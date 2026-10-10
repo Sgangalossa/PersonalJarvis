@@ -3208,16 +3208,13 @@ class BrainManager:
                 # (open-source AP-22).
                 if _keyless_provider_is_rescued_by_oauth(provider_name):
                     log.info(
-                        "Pre-boot key check: '%s' has no API key but a login / "
-                        "Cloud project credential -> kept active.",
-                        provider_name,
+                        "Pre-boot key check: provider has no API key but a login / "
+                        "Cloud project credential -> kept active."
                     )
                     continue
                 manager._dead_providers.add(provider_name)
                 log.info(
-                    "Pre-boot key check: no key in %s -> provider '%s' disabled.",
-                    provider_to_slots.get(provider_name, [provider_name]),
-                    provider_name,
+                    "Pre-boot key check: missing credential; provider disabled."
                 )
         return manager
 
@@ -11796,12 +11793,7 @@ class BrainManager:
             # — never read setup hints or provider names aloud (AP-11/ADR-0010).
             if self._dead_providers:
                 log.warning(
-                    "Provider chain empty (all dead/keyless) — spoken fallback. "
-                    "Diagnostic: %s",
-                    _format_provider_chain_error([
-                        (p, "", "missing_key", "no API key in this session")
-                        for p in self._dead_providers
-                    ]),
+                    "Provider chain empty (all dead/keyless) — spoken fallback."
                 )
             else:
                 log.warning("No brain providers available — spoken fallback used.")
