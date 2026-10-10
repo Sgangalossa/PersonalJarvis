@@ -292,7 +292,7 @@ def _open_url_windows(url: str) -> bool:
             log.info("open_url: launched %s -> %s", exe, host)
             return True
         except OSError as exc:
-            log.warning("open_url: %s failed (%s); trying next candidate", exe, exc)
+            log.warning("open_url: browser launch failed (%s); trying next candidate", type(exc).__name__)
             continue
     # Last resort: hand the URL to the OS association. It may be a UWP handler with
     # no classic exe — but it is also the path that silently opens nothing for a
@@ -305,7 +305,7 @@ def _open_url_windows(url: str) -> bool:
         )
         return True  # best-effort; ShellExecute may open nothing for a dead handler
     except OSError as exc:
-        log.warning("open_url: ShellExecute fallback failed for %s: %s", host, exc)
+        log.warning("open_url: ShellExecute fallback failed for %s (%s)", host, type(exc).__name__)
         return False
 
 
@@ -351,7 +351,7 @@ def _run_opener_checked(argv: list[str]) -> bool:
             capture_output=True,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        log.warning("open_url: opener %r failed: %s", argv[0], exc)
+        log.warning("open_url: opener %r failed (%s)", argv[0], type(exc).__name__)
         return False
     return proc.returncode == 0
 
@@ -395,7 +395,7 @@ def _open_url_linux(url: str) -> bool:
             log.info("open_url: Linux opened via %s -> %s", binname, host)
             return True
         except OSError as exc:
-            log.warning("open_url: %s failed (%s); trying next", binname, exc)
+            log.warning("open_url: browser %s failed (%s); trying next", binname, type(exc).__name__)
             continue
     log.warning("open_url: Linux found no browser to open %s", host)
     return False
