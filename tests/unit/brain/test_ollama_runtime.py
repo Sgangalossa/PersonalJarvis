@@ -378,6 +378,37 @@ def test_stop_with_a_dead_pid_forgets_the_record(monkeypatch, tmp_path) -> None:
     assert "not started by Jarvis" in ollama_runtime.stop_server()[1]
 
 
+def test_stop_redacts_process_inspection_errors(monkeypatch, tmp_path) -> None:
+    import psutil
+
+    ollama_runtime._record_pid(4711, "/usr/bin/ollama")
+
+    def denied(pid: int):
+        raise psutil.Error("private=/home/user/.config/secret-token")
+
+    monkeypatch.setattr(psutil, "Process", denied)
+    ok, detail = ollama_runtime.stop_server()
+    assert ok is False
+    assert "Check the application log" in detail
+    assert "/home/user/.config/secret-token" not in detail
+
+
+def test_stop_redacts_process_termination_errors(monkeypatch, tmp_path) -> None:
+    import psutil
+
+    class DeniedProcess(_FakeProcess):
+        def terminate(self) -> None:
+            raise psutil.Error("private=/home/user/.config/secret-token")
+
+    _FakeProcess.instances.clear()
+    ollama_runtime._record_pid(4711, "/usr/bin/ollama")
+    monkeypatch.setattr(psutil, "Process", DeniedProcess)
+    ok, detail = ollama_runtime.stop_server()
+    assert ok is False
+    assert "Check the application log" in detail
+    assert "/home/user/.config/secret-token" not in detail
+
+
 def test_stop_terminates_only_the_recorded_ollama_process(monkeypatch, tmp_path) -> None:
     import psutil
 
