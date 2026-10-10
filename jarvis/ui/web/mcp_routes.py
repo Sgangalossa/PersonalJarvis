@@ -383,7 +383,7 @@ async def check_mcp(name: str, request: Request) -> dict[str, Any]:
                 "note": "already connected",
             }
         except Exception as exc:  # noqa: BLE001
-            log.warning("MCP probe of %s failed", name, exc_info=True)
+            log.warning("MCP probe of %s failed (%s)", name, type(exc).__name__)
             msg = diagnostic_text(exc)
             registry._errors[name] = msg  # noqa: SLF001
             return {"ok": False, "tools_count": 0, "error": msg}
@@ -401,7 +401,7 @@ async def check_mcp(name: str, request: Request) -> dict[str, Any]:
         registry.clear_error(name)
         return {"ok": True, "tools_count": len(tools), "error": None}
     except Exception as exc:  # noqa: BLE001
-        log.warning("MCP probe of %s failed", name, exc_info=True)
+        log.warning("MCP probe of %s failed (%s)", name, type(exc).__name__)
         msg = diagnostic_text(exc)
         registry._errors[name] = msg  # noqa: SLF001
         return {"ok": False, "tools_count": 0, "error": msg}

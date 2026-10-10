@@ -176,7 +176,7 @@ def frontier_brain_candidates(
     try:
         chain = list(_resolve_chain(config))
     except Exception:  # noqa: BLE001 - a config problem must not kill the caller
-        log.info("frontier_brain_candidates: chain could not be built", exc_info=True)
+        log.info("frontier_brain_candidates: chain could not be built")
         return
     yielded: set[str] = set()
     for provider, model in chain:
@@ -318,7 +318,7 @@ def _tool_model_selection(config: JarvisConfig) -> tuple[str, str | None]:
         )
         return provider, (str(model).strip() or None) if model else None
     except Exception:  # noqa: BLE001 - an unreadable section is an unset one
-        log.info("tool-model selection could not be read", exc_info=True)
+        log.info("tool-model selection could not be read")
         return "auto", None
 
 
@@ -398,7 +398,7 @@ def resolve_vision_brain(
     try:
         chain = list(_resolve_chain(config))
     except Exception:  # noqa: BLE001 - a config problem must not kill the caller
-        log.info("resolve_vision_brain: chain could not be built", exc_info=True)
+        log.info("resolve_vision_brain: chain could not be built")
         return None
 
     for provider, model in chain:
@@ -450,7 +450,7 @@ def _subscription_connected(provider: str) -> bool:
     try:
         return bool(probe())
     except Exception:  # noqa: BLE001 - a probe must never break a turn
-        log.info("resolve_subscription_brain: %s probe failed", provider, exc_info=True)
+        log.info("resolve_subscription_brain: %s probe failed", provider)
         return False
 
 
@@ -523,7 +523,7 @@ def resolve_subscription_brain(
     try:
         candidates = _subscription_candidates(config)
     except Exception:  # noqa: BLE001 - a spec problem must not kill the caller
-        log.info("resolve_subscription_brain: candidates unavailable", exc_info=True)
+        log.info("resolve_subscription_brain: candidates unavailable")
         return None
 
     # Contract fidelity outranks card order: a CLI with a dedicated system
