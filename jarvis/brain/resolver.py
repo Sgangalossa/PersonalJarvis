@@ -148,7 +148,7 @@ def resolve_frontier_brain(
     last_error_type = type(last_err).__name__ if last_err is not None else "none"
     raise RuntimeError(
         "resolve_frontier_brain: all stages of the fallback chain failed. "
-        f"Last error type: {last_error_type}. Chain: {chain}"
+        f"Last error type: {last_error_type}."
     )
 
 

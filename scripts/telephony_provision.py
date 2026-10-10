@@ -133,7 +133,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return handlers[args.cmd](args)
     except provisioning.TelephonyProvisionError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        # Provider exceptions may contain request metadata or credential-bearing
+        # response fragments; keep the CLI output useful without echoing them.
+        print(
+            f"ERROR: telephony provisioning failed ({type(exc).__name__}). "
+            "Check the Jarvis log for details.",
+            file=sys.stderr,
+        )
         return 1
 
 

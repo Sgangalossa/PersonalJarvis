@@ -49,7 +49,7 @@ def open_file(path: Path) -> bool:
         )
         return True
     except OSError as exc:
-        log.warning("open_file failed for %s: %s", path, exc)
+        log.warning("open_file failed (%s)", type(exc).__name__)
         return False
 
 
@@ -93,7 +93,7 @@ def reveal_in_folder(path: Path) -> bool:
         )
         return True
     except OSError as exc:
-        log.warning("reveal_in_folder failed for %s: %s", path, exc)
+        log.warning("reveal_in_folder failed (%s)", type(exc).__name__)
         return False
 
 
@@ -156,7 +156,7 @@ def open_file_with(file: Path, launch_kind: str, launch_value: str) -> bool:
         log.warning("open_file_with: unknown launch_kind %r", launch_kind)
         return False
     except OSError as exc:
-        log.warning("open_file_with failed for %s (%s): %s", file, launch_value, exc)
+        log.warning("open_file_with failed (%s)", type(exc).__name__)
         return False
 
 
