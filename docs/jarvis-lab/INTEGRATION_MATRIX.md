@@ -217,9 +217,11 @@ first error. A complete capture still reports native qualification as false
 until the final bundle is checked against live Mac readiness.
 
 After all nine envelopes pass, `python scripts/macos_agent_bench_qualify.py
---assemble receipts/ > receipts.json` creates the final version-bound bundle.
-Assembly rejects stale or failing envelopes, duplicate scenario IDs, missing
-scenarios and unrelated JSON before the native readiness gate runs.
+--assemble receipts/ --output receipts.json --pretty` creates the final
+version-bound bundle. The output is published only after the complete JSON is
+durably written and an existing file is never replaced. Assembly rejects stale
+or failing envelopes, duplicate scenario IDs, missing scenarios and unrelated
+JSON before the native readiness gate runs.
 
 `jarvis/cu/macos_bench.py` now defines the first deterministic receipt
 contract, `physical-user-takeover`. CI can evaluate safety evidence without

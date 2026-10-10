@@ -174,3 +174,52 @@ async def test_capture_status_collects_invalid_and_remaining_results(
     assert payload["counts"]["failed"] == len(macagentbench_scenarios()) - 1
     assert payload["file_issues"][0]["file"] == f"{first.id}.json"
     assert len(payload["scenarios"]) == len(macagentbench_scenarios())
+
+
+@pytest.mark.asyncio
+async def test_assemble_writes_complete_bundle_without_overwrite(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    receipts_dir = tmp_path / "receipts"
+    receipts_dir.mkdir()
+    output_path = tmp_path / "bundle.json"
+
+    def passing_result(scenario_id: str, _envelope: object) -> SimpleNamespace:
+        return SimpleNamespace(
+            scenario_id=scenario_id,
+            receipt_valid=True,
+            evaluation=SimpleNamespace(passed=True, failures=()),
+        )
+
+    monkeypatch.setattr(cli, "evaluate_macos_receipt_envelope", passing_result)
+    for scenario in macagentbench_scenarios():
+        envelope = build_macos_receipt_scenario_template(scenario.id)
+        (receipts_dir / f"{scenario.id}.json").write_text(
+            json.dumps(envelope), encoding="utf-8"
+        )
+
+    assert (
+        await cli._run_assemble(
+            receipts_dir,
+            pretty=True,
+            output_path=output_path,
+        )
+        == 0
+    )
+    summary = json.loads(capsys.readouterr().out)
+    bundle = json.loads(output_path.read_text(encoding="utf-8"))
+    assert summary["bundle_path"] == str(output_path)
+    assert summary["native_qualification_complete"] is False
+    assert bundle["receipt_contract_id"] == cli.macos_receipt_contract_id()
+    original = output_path.read_bytes()
+
+    assert (
+        await cli._run_assemble(
+            receipts_dir,
+            pretty=True,
+            output_path=output_path,
+        )
+        == 2
+    )
+    assert output_path.read_bytes() == original
+    assert "refusing to overwrite" in json.loads(capsys.readouterr().out)["error"]

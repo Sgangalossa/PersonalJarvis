@@ -4,9 +4,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -87,7 +89,31 @@ async def _run_scenario(receipt_path: Path, scenario_id: str, *, pretty: bool) -
     return 0 if result.receipt_valid and result.evaluation.passed else 1
 
 
-async def _run_assemble(receipts_dir: Path, *, pretty: bool) -> int:
+def _write_new_json(output_path: Path, payload: dict[str, Any], *, pretty: bool) -> None:
+    temporary_path = output_path.with_name(
+        f".{output_path.name}.{uuid4().hex}.tmp"
+    )
+    try:
+        with temporary_path.open("x", encoding="utf-8", newline="\n") as stream:
+            stream.write(
+                json.dumps(payload, indent=2 if pretty else None, sort_keys=True)
+                + "\n"
+            )
+            stream.flush()
+            os.fsync(stream.fileno())
+        # A hard link publishes the already-complete inode without replacing an
+        # existing bundle. Both paths share the requested destination filesystem.
+        os.link(temporary_path, output_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+async def _run_assemble(
+    receipts_dir: Path,
+    *,
+    pretty: bool,
+    output_path: Path | None = None,
+) -> int:
     try:
         receipt_paths = sorted(
             path for path in receipts_dir.iterdir() if path.suffix.casefold() == ".json"
@@ -152,10 +178,34 @@ async def _run_assemble(receipts_dir: Path, *, pretty: bool) -> int:
         _print({"error": "receipt set is incomplete (" + "; ".join(details) + ")"}, pretty=pretty)
         return 2
 
+    bundle = {
+        "receipt_contract_id": macos_receipt_contract_id(),
+        "receipts": receipts,
+    }
+    if output_path is None:
+        _print(bundle, pretty=pretty)
+        return 0
+    try:
+        await asyncio.to_thread(
+            _write_new_json,
+            output_path,
+            bundle,
+            pretty=pretty,
+        )
+    except FileExistsError:
+        _print(
+            {"error": f"bundle output already exists; refusing to overwrite {output_path}"},
+            pretty=pretty,
+        )
+        return 2
+    except OSError as exc:
+        _print({"error": f"could not write bundle output: {exc}"}, pretty=pretty)
+        return 2
     _print(
         {
-            "receipt_contract_id": macos_receipt_contract_id(),
-            "receipts": receipts,
+            "receipt_contract_id": bundle["receipt_contract_id"],
+            "bundle_path": str(output_path),
+            "native_qualification_complete": False,
         },
         pretty=pretty,
     )
@@ -352,6 +402,12 @@ def main() -> int:
         help="assemble a complete bundle from passing version-bound receipt envelopes",
     )
     parser.add_argument(
+        "--output",
+        type=Path,
+        metavar="FILE",
+        help="write the assembled bundle atomically without replacing an existing file",
+    )
+    parser.add_argument(
         "--init-capture",
         type=Path,
         metavar="DIRECTORY",
@@ -365,6 +421,8 @@ def main() -> int:
     )
     parser.add_argument("--pretty", action="store_true", help="indent the JSON output")
     args = parser.parse_args()
+    if args.output is not None and args.assemble is None:
+        parser.error("--output requires --assemble")
     modes = sum(
         (
             args.template,
@@ -404,7 +462,13 @@ def main() -> int:
     if args.assemble is not None:
         if args.receipts is not None:
             parser.error("receipts cannot be supplied with --assemble")
-        return asyncio.run(_run_assemble(args.assemble, pretty=args.pretty))
+        return asyncio.run(
+            _run_assemble(
+                args.assemble,
+                pretty=args.pretty,
+                output_path=args.output,
+            )
+        )
     if args.scenario_template is not None:
         if args.receipts is not None:
             parser.error("receipts cannot be supplied with --scenario-template")
