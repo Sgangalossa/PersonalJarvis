@@ -71,3 +71,42 @@ async def test_assemble_rejects_duplicate_scenario_envelopes(
 
     assert await cli._run_assemble(tmp_path, pretty=False) == 2
     assert "duplicate receipt scenario" in json.loads(capsys.readouterr().out)["error"]
+
+
+
+def test_init_capture_creates_one_bound_envelope_per_scenario(
+    tmp_path, capsys
+) -> None:
+    receipts_dir = tmp_path / "receipts"
+
+    assert cli._run_init_capture(receipts_dir, pretty=False) == 0
+
+    scenarios = macagentbench_scenarios()
+    expected_names = sorted(f"{scenario.id}.json" for scenario in scenarios)
+    assert sorted(path.name for path in receipts_dir.iterdir()) == expected_names
+    for scenario in scenarios:
+        envelope = json.loads(
+            (receipts_dir / f"{scenario.id}.json").read_text(encoding="utf-8")
+        )
+        assert envelope["receipt_contract_id"] == cli.macos_receipt_contract_id()
+        assert envelope["scenario_id"] == scenario.id
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["receipt_contract_id"] == cli.macos_receipt_contract_id()
+    assert sorted(payload["receipt_files"]) == expected_names
+    assert payload["native_qualification_complete"] is False
+
+
+def test_init_capture_refuses_to_overwrite_existing_directory(
+    tmp_path, capsys
+) -> None:
+    receipts_dir = tmp_path / "receipts"
+    receipts_dir.mkdir()
+    sentinel = receipts_dir / "keep.txt"
+    sentinel.write_text("original", encoding="utf-8")
+
+    assert cli._run_init_capture(receipts_dir, pretty=False) == 2
+
+    assert sentinel.read_text(encoding="utf-8") == "original"
+    assert list(receipts_dir.iterdir()) == [sentinel]
+    assert "refusing to overwrite" in json.loads(capsys.readouterr().out)["error"]

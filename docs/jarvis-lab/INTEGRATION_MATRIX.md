@@ -205,6 +205,11 @@ the same strict schema and evaluator used by the final bundle. Stale, mistyped
 or unsafe evidence therefore fails at capture time without probing readiness or
 claiming native completion.
 
+Before live capture, `python scripts/macos_agent_bench_qualify.py
+--init-capture receipts --pretty` creates a new directory containing one
+contract-bound envelope for every authoritative scenario. It refuses any
+pre-existing destination, so preparation cannot overwrite captured evidence.
+
 After all nine envelopes pass, `python scripts/macos_agent_bench_qualify.py
 --assemble receipts/ > receipts.json` creates the final version-bound bundle.
 Assembly rejects stale or failing envelopes, duplicate scenario IDs, missing

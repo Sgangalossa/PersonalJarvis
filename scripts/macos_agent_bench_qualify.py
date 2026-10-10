@@ -162,6 +162,53 @@ async def _run_assemble(receipts_dir: Path, *, pretty: bool) -> int:
     return 0
 
 
+def _run_init_capture(receipts_dir: Path, *, pretty: bool) -> int:
+    scenarios = macagentbench_scenarios()
+    try:
+        receipts_dir.mkdir(parents=True)
+        receipt_files = []
+        for scenario in scenarios:
+            receipt_path = receipts_dir / f"{scenario.id}.json"
+            receipt_path.write_text(
+                json.dumps(
+                    build_macos_receipt_scenario_template(scenario.id),
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            receipt_files.append(receipt_path.name)
+    except FileExistsError:
+        _print(
+            {
+                "error": (
+                    "capture directory already exists; refusing to overwrite "
+                    f"{receipts_dir}"
+                )
+            },
+            pretty=pretty,
+        )
+        return 2
+    except OSError as exc:
+        _print(
+            {"error": f"could not initialize capture directory: {exc}"},
+            pretty=pretty,
+        )
+        return 2
+
+    _print(
+        {
+            "receipt_contract_id": macos_receipt_contract_id(),
+            "receipt_directory": str(receipts_dir),
+            "receipt_files": receipt_files,
+            "native_qualification_complete": False,
+        },
+        pretty=pretty,
+    )
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -195,6 +242,12 @@ def main() -> int:
         metavar="DIRECTORY",
         help="assemble a complete bundle from passing version-bound receipt envelopes",
     )
+    parser.add_argument(
+        "--init-capture",
+        type=Path,
+        metavar="DIRECTORY",
+        help="create a new directory with one version-bound envelope per scenario",
+    )
     parser.add_argument("--pretty", action="store_true", help="indent the JSON output")
     args = parser.parse_args()
     modes = sum(
@@ -204,12 +257,13 @@ def main() -> int:
             args.scenario is not None,
             args.scenario_template is not None,
             args.assemble is not None,
+            args.init_capture is not None,
         )
     )
     if modes > 1:
         parser.error(
-            "--template, --guide, --scenario, --scenario-template and --assemble "
-            "are mutually exclusive"
+            "--template, --guide, --scenario, --scenario-template, --assemble "
+            "and --init-capture are mutually exclusive"
         )
     if args.template:
         if args.receipts is not None:
@@ -221,6 +275,10 @@ def main() -> int:
             parser.error("receipts cannot be supplied with --guide")
         _print(build_macos_qualification_guide(), pretty=True)
         return 0
+    if args.init_capture is not None:
+        if args.receipts is not None:
+            parser.error("receipts cannot be supplied with --init-capture")
+        return _run_init_capture(args.init_capture, pretty=args.pretty)
     if args.assemble is not None:
         if args.receipts is not None:
             parser.error("receipts cannot be supplied with --assemble")
@@ -240,8 +298,8 @@ def main() -> int:
         return asyncio.run(_run_scenario(args.receipts, args.scenario, pretty=args.pretty))
     if args.receipts is None:
         parser.error(
-            "receipts is required unless --template, --guide, --scenario-template "
-            "or --assemble is used"
+            "receipts is required unless --template, --guide, --scenario-template, "
+            "--assemble or --init-capture is used"
         )
     return asyncio.run(_run(args.receipts, pretty=args.pretty))
 
