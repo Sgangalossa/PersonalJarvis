@@ -608,7 +608,7 @@ async def discord_identity() -> dict[str, Any]:
     try:
         identity = await fetch_current_user(tokens.access)
     except DiscordApiError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(status_code=502, detail="Discord account lookup failed.") from exc
     return {
         "ok": True,
         "plugin_id": "discord",
@@ -1424,7 +1424,7 @@ async def _install_community_plugin(plugin_id: str) -> dict[str, Any]:
     try:
         install_plugin_spec(spec)
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail="Plugin installation failed.") from exc
     if entry.usage_card:
         try:
             save_usage_card(spec.id, entry.usage_card)
@@ -1644,7 +1644,7 @@ async def community_uninstall(plugin_id: str) -> dict[str, Any]:
     try:
         removed = remove_community_plugin(plugin_id)
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail="Plugin installation failed.") from exc
     delete_usage_card(plugin_id)
     _refresh_plugin_in_live_registry(plugin_id)
 
@@ -1720,7 +1720,7 @@ def _read_manifest(path: Path) -> dict[str, Any]:
         parsed = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError) as exc:
         raise HTTPException(
-            status_code=400, detail=f"{path.name} could not be read: {exc}"
+            status_code=400, detail=f"{path.name} could not be read."
         ) from exc
     if not isinstance(parsed, dict):
         raise HTTPException(status_code=400, detail=f"{path.name} must be a JSON object.")
@@ -1859,7 +1859,7 @@ async def upload_plugin(
             try:
                 install_plugin_spec(spec)
             except RuntimeError as exc:
-                raise HTTPException(status_code=500, detail=str(exc)) from exc
+                raise HTTPException(status_code=500, detail="Plugin installation failed.") from exc
             return {"spec": spec, "upload": staged.to_json()}
 
     result = await asyncio.to_thread(_work)
