@@ -393,7 +393,7 @@ def start_server() -> tuple[bool, str]:
     except OSError as exc:
         # Not swallowed: the reason travels back as this function's own
         # return value and the card renders it verbatim.
-        return False, f"Could not start Ollama ({exc})."
+        return False, "Could not start Ollama. Check the application log for details."
     finally:
         if sink is not None:
             sink.close()
@@ -538,7 +538,7 @@ async def probe_host(base_url: str, *, transport: object | None = None) -> dict[
         }
     except (httpx.HTTPError, ValueError, AttributeError) as exc:
         latency_ms = int((time.monotonic() - started) * 1000)
-        reason = str(exc) or exc.__class__.__name__
+        reason = "connection or response error"
         return {
             "ok": False,
             "version": "",
@@ -867,7 +867,7 @@ def ensure_runtime_blocking() -> tuple[bool, str]:
                 return False, ("the Ollama installer finished but no binary was found")
         return start_server()
     except Exception as exc:  # noqa: BLE001 — honest sentence, never a raise
-        return False, str(exc)
+        return False, "Ollama setup failed. Check the application log for details."
 
 
 def _run_install() -> None:
