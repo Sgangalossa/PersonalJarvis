@@ -109,3 +109,69 @@ def test_init_capture_refuses_to_overwrite_existing_directory(
     assert sentinel.read_text(encoding="utf-8") == "original"
     assert list(receipts_dir.iterdir()) == [sentinel]
     assert "refusing to overwrite" in json.loads(capsys.readouterr().out)["error"]
+
+
+
+@pytest.mark.asyncio
+async def test_capture_status_reports_all_placeholder_failures(
+    tmp_path, capsys
+) -> None:
+    receipts_dir = tmp_path / "receipts"
+    assert cli._run_init_capture(receipts_dir, pretty=False) == 0
+    capsys.readouterr()
+
+    assert await cli._run_capture_status(receipts_dir, pretty=False) == 1
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["counts"] == {
+        "passed": 0,
+        "failed": len(macagentbench_scenarios()),
+        "invalid": 0,
+        "missing": 0,
+    }
+    assert payload["capture_complete"] is False
+    assert payload["native_qualification_complete"] is False
+
+
+@pytest.mark.asyncio
+async def test_capture_status_reports_complete_passing_set(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    receipts_dir = tmp_path / "receipts"
+    assert cli._run_init_capture(receipts_dir, pretty=False) == 0
+    capsys.readouterr()
+
+    def passing_result(scenario_id: str, _envelope: object) -> SimpleNamespace:
+        return SimpleNamespace(
+            scenario_id=scenario_id,
+            receipt_valid=True,
+            evaluation=SimpleNamespace(passed=True, failures=()),
+        )
+
+    monkeypatch.setattr(cli, "evaluate_macos_receipt_envelope", passing_result)
+
+    assert await cli._run_capture_status(receipts_dir, pretty=False) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["counts"]["passed"] == len(macagentbench_scenarios())
+    assert payload["capture_complete"] is True
+    assert payload["native_qualification_complete"] is False
+
+
+@pytest.mark.asyncio
+async def test_capture_status_collects_invalid_and_remaining_results(
+    tmp_path, capsys
+) -> None:
+    receipts_dir = tmp_path / "receipts"
+    assert cli._run_init_capture(receipts_dir, pretty=False) == 0
+    capsys.readouterr()
+    first = macagentbench_scenarios()[0]
+    (receipts_dir / f"{first.id}.json").write_text("{", encoding="utf-8")
+
+    assert await cli._run_capture_status(receipts_dir, pretty=False) == 1
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["counts"]["missing"] == 1
+    assert payload["counts"]["failed"] == len(macagentbench_scenarios()) - 1
+    assert payload["file_issues"][0]["file"] == f"{first.id}.json"
+    assert len(payload["scenarios"]) == len(macagentbench_scenarios())

@@ -162,6 +162,115 @@ async def _run_assemble(receipts_dir: Path, *, pretty: bool) -> int:
     return 0
 
 
+async def _run_capture_status(receipts_dir: Path, *, pretty: bool) -> int:
+    try:
+        receipt_paths = sorted(
+            path for path in receipts_dir.iterdir() if path.suffix.casefold() == ".json"
+        )
+    except OSError as exc:
+        _print({"error": f"could not list receipt directory: {exc}"}, pretty=pretty)
+        return 2
+
+    expected_ids = {scenario.id for scenario in macagentbench_scenarios()}
+    scenario_status: dict[str, dict[str, object]] = {}
+    file_issues: list[dict[str, str]] = []
+    unexpected_files: list[str] = []
+    for path in receipt_paths:
+        try:
+            receipt_text = await asyncio.to_thread(path.read_text, encoding="utf-8")
+            envelope = json.loads(receipt_text)
+        except (OSError, json.JSONDecodeError) as exc:
+            file_issues.append(
+                {"file": path.name, "status": "invalid", "error": str(exc)}
+            )
+            continue
+        if not isinstance(envelope, dict):
+            file_issues.append(
+                {
+                    "file": path.name,
+                    "status": "invalid",
+                    "error": "receipt envelope must be an object",
+                }
+            )
+            continue
+        scenario_id = envelope.get("scenario_id")
+        if type(scenario_id) is not str:
+            file_issues.append(
+                {
+                    "file": path.name,
+                    "status": "invalid",
+                    "error": "scenario_id must be a string",
+                }
+            )
+            continue
+        if scenario_id not in expected_ids:
+            unexpected_files.append(path.name)
+            continue
+        if scenario_id in scenario_status:
+            file_issues.append(
+                {
+                    "file": path.name,
+                    "status": "invalid",
+                    "error": f"duplicate receipt scenario: {scenario_id}",
+                }
+            )
+            scenario_status[scenario_id]["status"] = "invalid"
+            continue
+        try:
+            result = evaluate_macos_receipt_envelope(scenario_id, envelope)
+        except ValueError as exc:
+            scenario_status[scenario_id] = {
+                "file": path.name,
+                "status": "invalid",
+                "failures": [str(exc)],
+            }
+            continue
+        scenario_status[scenario_id] = {
+            "file": path.name,
+            "status": (
+                "passed"
+                if result.receipt_valid and result.evaluation.passed
+                else "failed"
+            ),
+            "failures": list(result.evaluation.failures),
+        }
+
+    for scenario_id in expected_ids - set(scenario_status):
+        scenario_status[scenario_id] = {
+            "file": None,
+            "status": "missing",
+            "failures": [],
+        }
+    ordered_status = {
+        scenario_id: scenario_status[scenario_id]
+        for scenario_id in sorted(expected_ids)
+    }
+    counts = {
+        status: sum(
+            entry["status"] == status for entry in ordered_status.values()
+        )
+        for status in ("passed", "failed", "invalid", "missing")
+    }
+    capture_complete = (
+        counts["passed"] == len(expected_ids)
+        and not file_issues
+        and not unexpected_files
+    )
+    _print(
+        {
+            "receipt_contract_id": macos_receipt_contract_id(),
+            "capture_complete": capture_complete,
+            "native_qualification_complete": False,
+            "counts": counts,
+            "scenarios": ordered_status,
+            "file_issues": file_issues,
+            "unexpected_files": unexpected_files,
+        },
+        pretty=pretty,
+    )
+    return 0 if capture_complete else 1
+
+
 def _run_init_capture(receipts_dir: Path, *, pretty: bool) -> int:
     scenarios = macagentbench_scenarios()
     try:
@@ -248,6 +357,12 @@ def main() -> int:
         metavar="DIRECTORY",
         help="create a new directory with one version-bound envelope per scenario",
     )
+    parser.add_argument(
+        "--capture-status",
+        type=Path,
+        metavar="DIRECTORY",
+        help="report progress for every version-bound scenario envelope",
+    )
     parser.add_argument("--pretty", action="store_true", help="indent the JSON output")
     args = parser.parse_args()
     modes = sum(
@@ -258,12 +373,13 @@ def main() -> int:
             args.scenario_template is not None,
             args.assemble is not None,
             args.init_capture is not None,
+            args.capture_status is not None,
         )
     )
     if modes > 1:
         parser.error(
-            "--template, --guide, --scenario, --scenario-template, --assemble "
-            "and --init-capture are mutually exclusive"
+            "--template, --guide, --scenario, --scenario-template, --assemble, "
+            "--init-capture and --capture-status are mutually exclusive"
         )
     if args.template:
         if args.receipts is not None:
@@ -279,6 +395,12 @@ def main() -> int:
         if args.receipts is not None:
             parser.error("receipts cannot be supplied with --init-capture")
         return _run_init_capture(args.init_capture, pretty=args.pretty)
+    if args.capture_status is not None:
+        if args.receipts is not None:
+            parser.error("receipts cannot be supplied with --capture-status")
+        return asyncio.run(
+            _run_capture_status(args.capture_status, pretty=args.pretty)
+        )
     if args.assemble is not None:
         if args.receipts is not None:
             parser.error("receipts cannot be supplied with --assemble")
@@ -299,7 +421,7 @@ def main() -> int:
     if args.receipts is None:
         parser.error(
             "receipts is required unless --template, --guide, --scenario-template, "
-            "--assemble or --init-capture is used"
+            "--assemble, --init-capture or --capture-status is used"
         )
     return asyncio.run(_run(args.receipts, pretty=args.pretty))
 
