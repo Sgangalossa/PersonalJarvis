@@ -474,7 +474,7 @@ def _first_secret(candidates: Sequence[str]) -> str | None:
                     revision,
                     time.monotonic() + _SECRET_FAILURE_TTL_S,
                 )
-                log.debug("polish credential lookup failed for %r: %s", slot, exc)
+                log.debug("polish credential lookup failed (%s)", type(exc).__name__)
                 continue
             # Written without a lock on purpose: the sweep runs in a worker
             # thread while the client build reads from the event loop, the dict
