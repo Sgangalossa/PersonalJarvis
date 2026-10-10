@@ -73,7 +73,6 @@ async def test_assemble_rejects_duplicate_scenario_envelopes(
     assert "duplicate receipt scenario" in json.loads(capsys.readouterr().out)["error"]
 
 
-
 def test_init_capture_creates_one_bound_envelope_per_scenario(
     tmp_path, capsys
 ) -> None:
