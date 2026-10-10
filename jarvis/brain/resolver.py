@@ -362,8 +362,7 @@ def resolve_tool_model_brain(
         )
     except Exception as exc:  # noqa: BLE001 - a caller must degrade, not crash
         log.info(
-            "resolve_tool_model_brain: %s/%s not instantiable (%s)",
-            provider, model or "<default>", 'provider-error',
+            "resolve_tool_model_brain: provider not instantiable"
         )
         return None
     _cache[cache_key] = brain
