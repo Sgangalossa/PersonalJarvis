@@ -110,7 +110,7 @@ def _refresh_plugin_in_live_registry(plugin_id: str) -> None:
 
         forget_connected_music_services()
     except Exception:  # noqa: BLE001 — a cache miss is the worst case here
-        log.debug("music connection cache reset skipped", exc_info=True)
+        log.debug("music connection cache reset skipped")
     try:
         from jarvis.marketplace.plugin_shared import get_active_plugin_registry
 
@@ -121,7 +121,7 @@ def _refresh_plugin_in_live_registry(plugin_id: str) -> None:
         # A failed re-expand after the user just connected a plugin is a
         # recoverable workflow failure, not a hot-path event — log at WARNING
         # so it surfaces without a debug flag.
-        log.warning("live plugin refresh failed for %s", plugin_id, exc_info=True)
+        log.warning("live plugin refresh failed for %s", plugin_id)
 
 
 def _live_plugin_registry() -> Any:
@@ -549,7 +549,7 @@ async def connect_pat(plugin_id: str, body: PatConnectBody, request: Request) ->
                     plugin_id,
                     cleanup_exc,
                 )
-            log.warning("%s channel enable failed: %s", plugin_id, exc)
+            log.warning("%s channel enable failed: %s", plugin_id, type(exc).__name__)
             raise HTTPException(
                 status_code=500,
                 detail=f"{plugin_id}-channel-enable-failed: {type(exc).__name__}",
@@ -997,7 +997,7 @@ async def disconnect(plugin_id: str, request: Request) -> dict[str, Any]:
         if tokens is not None:
             revocation = await revoke_tokens(spec, tokens)
     except Exception as exc:  # noqa: BLE001 - never block the disconnect
-        log.info("plugin %s revocation skipped: %s", plugin_id, exc)
+        log.info("plugin %s revocation skipped: %s", plugin_id, type(exc).__name__)
         revocation = "failed"
 
     store.delete(plugin_id)
@@ -1006,12 +1006,12 @@ async def disconnect(plugin_id: str, request: Request) -> dict[str, Any]:
         try:
             on_telegram_disconnected()
         except Exception as exc:  # noqa: BLE001
-            log.warning("telegram channel disable failed: %s", exc)
+            log.warning("telegram channel disable failed: %s", type(exc).__name__)
     elif plugin_id == "discord":
         try:
             on_discord_disconnected()
         except Exception as exc:  # noqa: BLE001
-            log.warning("discord channel disable failed: %s", exc)
+            log.warning("discord channel disable failed: %s", type(exc).__name__)
     live_applied = False
     if plugin_id in _CHANNEL_PLUGIN_IDS:
         live_applied = await apply_channel_live(request.app.state, plugin_id)
@@ -1288,7 +1288,7 @@ async def plugin_files(plugin_id: str, response: Response) -> dict[str, Any]:
         try:
             files.append(_text_file("USAGE.md", card.read_text(encoding="utf-8")))
         except OSError as exc:
-            log.warning("usage card for %s unreadable: %s", spec.id, exc)
+            log.warning("usage card for %s unreadable: %s", spec.id, type(exc).__name__)
 
     if spec.source == "community":
         from jarvis.marketplace import community_source
@@ -1296,7 +1296,7 @@ async def plugin_files(plugin_id: str, response: Response) -> dict[str, Any]:
         try:
             index, _ = await community_source.get_index()
         except Exception as exc:  # noqa: BLE001 — the card must still open
-            log.warning("community index unavailable for %s files: %s", spec.id, exc)
+            log.warning("community index unavailable for %s files: %s", spec.id, type(exc).__name__)
             index = None
         entry = (
             next((e for e in index.plugins if e.name == spec.id), None)
@@ -1360,7 +1360,7 @@ async def community_contents(item_id: str, response: Response) -> dict[str, Any]
     except HTTPException as exc:
         # Honest degradation: say the text could not be fetched, rather than
         # show an empty panel that reads like an empty skill.
-        log.warning("community contents: %s unreadable (%s)", item_id, exc.detail)
+        log.warning("community contents: %s unreadable (%s)", item_id, type(exc).__name__)
         out["error"] = f"The file could not be downloaded: {exc.detail}"
         return out
     out["files"] = [_text_file("SKILL.md", text, truncated=truncated)]
@@ -1431,7 +1431,7 @@ async def _install_community_plugin(plugin_id: str) -> dict[str, Any]:
         except (ValueError, OSError) as exc:
             # Keywords are a quality upgrade, not a prerequisite — the
             # relevance gate still matches on the plugin's own name/tools.
-            log.warning("usage card for %s not saved: %s", spec.id, exc)
+            log.warning("usage card for %s not saved: %s", spec.id, type(exc).__name__)
     _refresh_plugin_in_live_registry(spec.id)
     item = spec.model_dump(mode="json")
     item["status"] = "not_connected"
@@ -1545,7 +1545,7 @@ async def _announce_install(request: Request, result: dict[str, Any]) -> None:
         else:
             bus.publish(event)
     except Exception as exc:  # noqa: BLE001 - a missed refresh is not a failed install
-        log.debug("MarketplaceItemInstalled publish failed: %s", exc)
+        log.debug("MarketplaceItemInstalled publish failed: %s", type(exc).__name__)
 
 
 def _install_by_name_404(item_id: str, index: Any) -> HTTPException:
@@ -1639,7 +1639,7 @@ async def community_uninstall(plugin_id: str) -> dict[str, Any]:
     try:
         tokens = store.load(plugin_id)
     except Exception as exc:  # noqa: BLE001 - never block the uninstall
-        log.info("plugin %s token load for revocation skipped: %s", plugin_id, exc)
+        log.info("plugin %s token load for revocation skipped: %s", plugin_id, type(exc).__name__)
     store.delete(plugin_id)
     try:
         removed = remove_community_plugin(plugin_id)
@@ -1653,7 +1653,7 @@ async def community_uninstall(plugin_id: str) -> dict[str, Any]:
         try:
             revocation = await revoke_tokens(spec, tokens)
         except Exception as exc:  # noqa: BLE001 - never block the uninstall
-            log.info("plugin %s revocation skipped: %s", plugin_id, exc)
+            log.info("plugin %s revocation skipped: %s", plugin_id, type(exc).__name__)
             revocation = "failed"
     return {"ok": True, "removed": removed, "revocation": revocation}
 
