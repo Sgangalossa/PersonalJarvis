@@ -25,7 +25,6 @@ from jarvis.core.config import get_secret, set_secret
 from jarvis.core.events import BrainToolsChanged
 from jarvis.mcp import state as mcp_state
 from jarvis.mcp.registry import BOOTSTRAP_SERVERS, MCPRegistry, MCPServerSpec
-from jarvis.ui.web.error_text import diagnostic_text
 
 log = logging.getLogger(__name__)
 
@@ -297,7 +296,8 @@ async def start_mcp(name: str, request: Request) -> dict[str, Any]:
     try:
         await registry.start_enabled([name])
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(500, f"Start failed: {exc}") from exc
+        log.warning("MCP start failed for %s (%s)", name, type(exc).__name__)
+        raise HTTPException(500, "MCP server start failed.") from exc
 
     await _sync_tools_for_server(request, registry, name, adding=True)
     await _publish_brain_tools_changed(request, f"mcp_started:{name}")
@@ -384,7 +384,7 @@ async def check_mcp(name: str, request: Request) -> dict[str, Any]:
             }
         except Exception as exc:  # noqa: BLE001
             log.warning("MCP probe of %s failed (%s)", name, type(exc).__name__)
-            msg = diagnostic_text(exc)
+            msg = f"MCP probe failed ({type(exc).__name__})."
             registry._errors[name] = msg  # noqa: SLF001
             return {"ok": False, "tools_count": 0, "error": msg}
 
@@ -402,7 +402,7 @@ async def check_mcp(name: str, request: Request) -> dict[str, Any]:
         return {"ok": True, "tools_count": len(tools), "error": None}
     except Exception as exc:  # noqa: BLE001
         log.warning("MCP probe of %s failed (%s)", name, type(exc).__name__)
-        msg = diagnostic_text(exc)
+        msg = f"MCP probe failed ({type(exc).__name__})."
         registry._errors[name] = msg  # noqa: SLF001
         return {"ok": False, "tools_count": 0, "error": msg}
     finally:
