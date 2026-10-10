@@ -123,6 +123,22 @@ def test_start_without_a_binary_names_the_fix(monkeypatch) -> None:
     assert "install" in detail.lower()
 
 
+def test_start_redacts_os_error_details(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(ollama_runtime, "_server_version", lambda timeout=1.5: None)
+    monkeypatch.setattr(ollama_runtime, "find_binary", lambda: "/usr/bin/ollama")
+    monkeypatch.setattr(ollama_runtime, "_log_path", lambda: tmp_path / "server.log")
+
+    def fail_popen(*args: Any, **kwargs: Any) -> None:
+        raise OSError("permission denied at /private/user/token.txt")
+
+    monkeypatch.setattr(subprocess, "Popen", fail_popen)
+    ok, detail = ollama_runtime.start_server()
+    assert ok is False
+    assert "Could not start Ollama" in detail
+    assert "/private/user/token.txt" not in detail
+    assert "permission denied" not in detail
+
+
 def test_start_spawns_detached_and_waits_for_the_port(monkeypatch) -> None:
     monkeypatch.setattr(ollama_runtime, "_server_version", lambda timeout=1.5: None)
     monkeypatch.setattr(ollama_runtime, "find_binary", lambda: "/usr/bin/ollama")
@@ -446,7 +462,7 @@ async def test_probe_host_unreachable_is_one_sentence() -> None:
     import httpx
 
     def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("connection refused")
+        raise httpx.ConnectError("connection refused; secret=/private/user/token.txt")
 
     result = await ollama_runtime.probe_host(
         "http://127.0.0.1:9", transport=httpx.MockTransport(handler)
@@ -454,6 +470,8 @@ async def test_probe_host_unreachable_is_one_sentence() -> None:
     assert result["ok"] is False
     assert result["version"] == ""
     assert "No Ollama answered at http://127.0.0.1:9" in str(result["detail"])
+    assert "connection refused" not in str(result["detail"])
+    assert "/private/user/token.txt" not in str(result["detail"])
 
 
 # ── env_guide per OS ─────────────────────────────────────────────────────
