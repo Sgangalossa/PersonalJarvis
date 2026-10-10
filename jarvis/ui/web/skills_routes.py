@@ -703,7 +703,7 @@ async def import_skill(body: SkillImportBody, request: Request) -> dict[str, Any
         except httpx.HTTPError as exc:
             raise HTTPException(
                 status_code=400,
-                detail=f"Download failed: {exc}",
+                detail="Download failed; verify the URL and try again.",
             ) from exc
 
     content = resp.text
@@ -760,7 +760,7 @@ async def import_skill(body: SkillImportBody, request: Request) -> dict[str, Any
     except OSError as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Could not write skill: {exc}",
+            detail="Could not write skill.",
         ) from exc
 
     installed = parse_skill(target_file)
@@ -780,7 +780,7 @@ def _import_skill_folder(path_str: str, reg: Any) -> tuple[str, list[str]]:
     try:
         src = src.resolve()
     except OSError as exc:
-        raise HTTPException(status_code=400, detail=f"Unreadable path: {exc}") from exc
+        raise HTTPException(status_code=400, detail="Unreadable path.") from exc
     folder = src.parent if src.name == "SKILL.md" else src
     skill_md = folder / "SKILL.md"
     if not skill_md.is_file():
@@ -843,7 +843,7 @@ def _import_skill_folder(path_str: str, reg: Any) -> tuple[str, list[str]]:
                 shutil.copytree(src_kind, target_dir / kind, dirs_exist_ok=True)
     except OSError as exc:
         raise HTTPException(
-            status_code=500, detail=f"Could not copy skill: {exc}"
+            status_code=500, detail="Could not copy skill."
         ) from exc
     return name, lint_findings
 
@@ -941,7 +941,7 @@ def _locate_skill_root(staged_root: Path) -> Path:
         except OSError as exc:
             raise HTTPException(
                 status_code=500,
-                detail=f"Could not normalize {found.name}: {exc}",
+                detail=f"Could not normalize {found.name}.",
             ) from exc
         found = renamed
     return found.parent
@@ -1419,7 +1419,7 @@ def _delete_user_skill(reg: Any, name: str) -> None:
         shutil.rmtree(target)
     except OSError as exc:
         raise HTTPException(
-            status_code=500, detail=f"Could not delete skill: {exc}"
+            status_code=500, detail="Could not delete skill."
         ) from exc
 
     reg._skills.pop(name, None)  # type: ignore[attr-defined]
@@ -1497,7 +1497,7 @@ def update_skill(
         tmp.replace(target)
     except OSError as exc:
         raise HTTPException(
-            status_code=500, detail=f"Could not write skill: {exc}"
+            status_code=500, detail="Could not write skill."
         ) from exc
 
     # Re-parse immediately + replace in the registry, so the response shows the
