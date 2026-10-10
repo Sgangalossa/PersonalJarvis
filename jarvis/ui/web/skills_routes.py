@@ -1742,7 +1742,7 @@ async def query_local_skills(
     try:
         hits, brain_used = await searcher.query(filters)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"Query failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail="Skill query failed.") from exc
 
     # Return the full summary for every hit, so the UI can render the same
     # objects as in the normal list (no separate sub-component for search
@@ -1811,7 +1811,7 @@ async def search_catalog(
     try:
         candidates = await finder.search(filters)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"Search failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail="Skill catalog search failed.") from exc
 
     return {
         "query": body.query,
