@@ -13405,12 +13405,7 @@ class BrainManager:
             previous_active = self._active_name
             try:
                 await self.switch(provider, persist=True)
-                log.info(
-                    "Fresh-install heal: active brain %r had no usable "
-                    "credential; promoted just-keyed provider %r to active and "
-                    "persisted brain.primary.",
-                    previous_active, provider,
-                )
+                log.info("Fresh-install heal: activated the newly configured provider")
             except Exception:  # noqa: BLE001 — a subscriber must never kill the bus (AP-18)
                 # SecretConfigured-derived provider data and exception metadata
                 # stay out of diagnostics; the bus must still fail closed.
