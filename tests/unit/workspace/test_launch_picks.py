@@ -212,6 +212,7 @@ async def test_live_models_does_not_wait_again_for_a_read_an_earlier_request_sta
 ) -> None:
     """The slow read left running by one picker open must not cost the next
     open its budget again; the second request answers at once."""
+    import asyncio
     import threading
     import time
 
