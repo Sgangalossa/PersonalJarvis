@@ -72,10 +72,10 @@ def test_versions_equal_is_normalized_and_fail_closed() -> None:
 
 
 def test_remote_is_official_accepts_only_exact_repo() -> None:
-    # https, ssh, and a local path on either slash style all resolve.
+    # HTTPS and both standard SSH URL forms are accepted only on github.com.
     assert u._remote_is_official("https://github.com/PersonalJarvis/PersonalJarvis.git")
     assert u._remote_is_official("git@github.com:PersonalJarvis/PersonalJarvis.git")
-    assert u._remote_is_official("C:\\x\\PersonalJarvis\\PersonalJarvis")
+    assert u._remote_is_official("ssh://git@github.com/PersonalJarvis/PersonalJarvis.git")
     # A different repo is rejected...
     assert not u._remote_is_official("https://github.com/someone/fork.git")
     # ...and so is a look-alike fork whose name merely starts with the slug...
@@ -84,6 +84,15 @@ def test_remote_is_official_accepts_only_exact_repo() -> None:
     )
     # ...or one under a different owner with the right repo name.
     assert not u._remote_is_official("https://github.com/evil/PersonalJarvis.git")
+    # Matching owner/name tails on another host must not impersonate GitHub.
+    assert not u._remote_is_official(
+        "https://evil.example/PersonalJarvis/PersonalJarvis.git"
+    )
+    assert not u._remote_is_official(
+        "https://gitlab.com/PersonalJarvis/PersonalJarvis.git"
+    )
+    # A local path does not prove that the remote is the official repository.
+    assert not u._remote_is_official("C:\\x\\PersonalJarvis\\PersonalJarvis")
 
 
 def test_remote_override_still_rejects_lookalike_repos(

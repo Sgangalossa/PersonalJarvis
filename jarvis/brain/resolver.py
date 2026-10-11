@@ -134,20 +134,20 @@ def resolve_frontier_brain(
         except Exception as exc:  # noqa: BLE001
             last_err = exc
             log.info(
-                "resolve_frontier_brain: %s/%s not instantiable (%s) — "
-                "trying next stage of the fallback chain",
-                provider, model or "<default>", type(exc).__name__,
+                "resolve_frontier_brain: provider not instantiable (%s)",
+                'provider-error',
             )
             continue
         _cache[cache_key] = brain
         log.debug(
-            "resolve_frontier_brain: %s/%s instantiated", provider, model or "<default>",
+            "resolve_frontier_brain: provider instantiated",
         )
         return brain
 
+    last_error_type = type(last_err).__name__ if last_err is not None else "none"
     raise RuntimeError(
         "resolve_frontier_brain: all stages of the fallback chain failed. "
-        f"Last error: {last_err!r}. Chain: {chain}"
+        f"Last error type: {last_error_type}."
     )
 
 
@@ -175,7 +175,7 @@ def frontier_brain_candidates(
     try:
         chain = list(_resolve_chain(config))
     except Exception:  # noqa: BLE001 - a config problem must not kill the caller
-        log.info("frontier_brain_candidates: chain could not be built", exc_info=True)
+        log.info("frontier_brain_candidates: chain could not be built")
         return
     yielded: set[str] = set()
     for provider, model in chain:
@@ -190,8 +190,8 @@ def frontier_brain_candidates(
                 )
             except Exception as exc:  # noqa: BLE001
                 log.info(
-                    "frontier_brain_candidates: %s/%s not instantiable (%s)",
-                    provider, model or "<default>", type(exc).__name__,
+                    "frontier_brain_candidates: provider not instantiable (%s)",
+                    'provider-error',
                 )
                 continue
             _cache[cache_key] = brain
@@ -250,15 +250,17 @@ def resolve_quality_brain(
     _ensure_bus_subscription(bus)
     try:
         chain = list(_resolve_chain(config))
-    except Exception:  # noqa: BLE001 - a config problem must not kill the caller
-        log.info("resolve_quality_brain: chain could not be built", exc_info=True)
+    except Exception as exc:  # noqa: BLE001 - a config problem must not kill the caller
+        log.info(
+            "resolve_quality_brain: chain could not be built (%s)",
+            'provider-error',
+        )
         return None
 
     for provider, model in chain:
         if _is_fast_tier(config, provider, model):
             log.debug(
-                "resolve_quality_brain: skipping %s/%s (latency-first tier)",
-                provider, model,
+                "resolve_quality_brain: skipping latency-first tier"
             )
             continue
         cache_key = (provider, model or "")
@@ -271,8 +273,8 @@ def resolve_quality_brain(
             )
         except Exception as exc:  # noqa: BLE001
             log.info(
-                "resolve_quality_brain: %s/%s not instantiable (%s)",
-                provider, model or "<default>", type(exc).__name__,
+                "resolve_quality_brain: provider not instantiable (%s)",
+                'provider-error',
             )
             continue
         _cache[cache_key] = brain
@@ -314,7 +316,7 @@ def _tool_model_selection(config: JarvisConfig) -> tuple[str, str | None]:
         )
         return provider, (str(model).strip() or None) if model else None
     except Exception:  # noqa: BLE001 - an unreadable section is an unset one
-        log.info("tool-model selection could not be read", exc_info=True)
+        log.info("tool-model selection could not be read")
         return "auto", None
 
 
@@ -360,8 +362,7 @@ def resolve_tool_model_brain(
         )
     except Exception as exc:  # noqa: BLE001 - a caller must degrade, not crash
         log.info(
-            "resolve_tool_model_brain: %s/%s not instantiable (%s)",
-            provider, model or "<default>", type(exc).__name__,
+            "resolve_tool_model_brain: provider not instantiable"
         )
         return None
     _cache[cache_key] = brain
@@ -394,7 +395,7 @@ def resolve_vision_brain(
     try:
         chain = list(_resolve_chain(config))
     except Exception:  # noqa: BLE001 - a config problem must not kill the caller
-        log.info("resolve_vision_brain: chain could not be built", exc_info=True)
+        log.info("resolve_vision_brain: chain could not be built")
         return None
 
     for provider, model in chain:
@@ -407,15 +408,14 @@ def resolve_vision_brain(
                 )
             except Exception as exc:  # noqa: BLE001
                 log.info(
-                    "resolve_vision_brain: %s/%s not instantiable (%s)",
-                    provider, model or "<default>", type(exc).__name__,
+                    "resolve_vision_brain: provider not instantiable (%s)",
+                    'provider-error',
                 )
                 continue
             _cache[cache_key] = brain
         if not getattr(brain, "supports_vision", False):
             log.debug(
-                "resolve_vision_brain: skipping %s/%s (supports_vision is not set)",
-                provider, model or "<default>",
+                "resolve_vision_brain: skipping provider without vision support"
             )
             continue
         return brain
@@ -446,7 +446,7 @@ def _subscription_connected(provider: str) -> bool:
     try:
         return bool(probe())
     except Exception:  # noqa: BLE001 - a probe must never break a turn
-        log.info("resolve_subscription_brain: %s probe failed", provider, exc_info=True)
+        log.info("resolve_subscription_brain: subscription probe failed")
         return False
 
 
@@ -519,7 +519,7 @@ def resolve_subscription_brain(
     try:
         candidates = _subscription_candidates(config)
     except Exception:  # noqa: BLE001 - a spec problem must not kill the caller
-        log.info("resolve_subscription_brain: candidates unavailable", exc_info=True)
+        log.info("resolve_subscription_brain: candidates unavailable")
         return None
 
     # Contract fidelity outranks card order: a CLI with a dedicated system
@@ -534,7 +534,7 @@ def resolve_subscription_brain(
 
     for provider in candidates:
         if not _subscription_connected(provider):
-            log.debug("resolve_subscription_brain: %s not signed in", provider)
+            log.debug("resolve_subscription_brain: subscription is not connected")
             continue
         kwargs: dict[str, Any] = {"structured_prompts": True}
         model = _deep_model_for(config, provider)
@@ -548,19 +548,16 @@ def resolve_subscription_brain(
             # Signature probe, not a name check (AP-21): no structured mode
             # means no brief, so skip rather than degrade invisibly.
             log.info(
-                "resolve_subscription_brain: %s cannot forward a system "
-                "contract — skipping rather than answering conversationally",
-                provider,
+                "resolve_subscription_brain: provider cannot forward a system "
+                "contract — skipping rather than answering conversationally"
             )
             continue
         except Exception as exc:  # noqa: BLE001
             log.info(
-                "resolve_subscription_brain: %s not instantiable (%s)",
-                provider,
-                type(exc).__name__,
+                "resolve_subscription_brain: provider not instantiable"
             )
             continue
-        log.info("resolve_subscription_brain: writing on %s", provider)
+        log.info("resolve_subscription_brain: using connected subscription")
         return brain
 
     log.info("resolve_subscription_brain: no connected subscription reachable")

@@ -10,14 +10,16 @@ import pytest
 
 from jarvis.control.cancel import CancelToken
 from jarvis.core.bus import EventBus
-from jarvis.core.events import MessageSent
-from jarvis.tasks.scheduler import TaskScheduler, _match_filter
+from jarvis.core.events import MessageSent, MissionCompleted
+from jarvis.tasks.scheduler import TaskScheduler, TaskStateConflict, _match_filter
 from jarvis.tasks.schema import (
     SpeakAction,
     TaskSpec,
     TriggerAfterDelay,
     TriggerAtTime,
+    TriggerEvery,
     TriggerOnEvent,
+    TriggerWebhook,
 )
 from jarvis.tasks.store import TaskStore
 
@@ -138,6 +140,70 @@ async def test_on_event_dispatches_when_event_published(
 
     # runner.run ist awaited direkt im subscribe_all-Handler, also synchron.
     assert runner.dispatched == [str(spec.id)]
+
+
+async def test_on_event_subject_dedup_survives_scheduler_restart(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "event-dedup.db"
+    bus1 = EventBus()
+    store1 = TaskStore(db)
+    await store1.init()
+    runner1 = FakeRunner()
+    scheduler1 = TaskScheduler(store=store1, bus=bus1, runner=runner1)
+    scheduler1.bind_bus()
+    spec = TaskSpec(
+        title="mission-once",
+        trigger=TriggerOnEvent(event_name="MissionCompleted", filter_expr=None),
+        action=SpeakAction(text="x"),
+    )
+    await scheduler1.schedule(spec)
+    event = MissionCompleted(mission_id="mission-42", status="approved")
+    await bus1.publish(event)
+    assert runner1.dispatched == [str(spec.id)]
+    await store1.close()
+
+    bus2 = EventBus()
+    store2 = TaskStore(db)
+    await store2.init()
+    runner2 = FakeRunner()
+    scheduler2 = TaskScheduler(store=store2, bus=bus2, runner=runner2)
+    try:
+        await scheduler2.hydrate()
+        scheduler2.bind_bus()
+        await bus2.publish(event)
+        assert runner2.dispatched == []
+    finally:
+        await store2.close()
+
+
+async def test_hook_delivery_claim_allows_only_one_concurrent_runner(
+    store: TaskStore, bus: EventBus, runner: FakeRunner
+) -> None:
+    scheduler = TaskScheduler(store=store, bus=bus, runner=runner)
+    spec = TaskSpec(
+        title="hook-once",
+        trigger=TriggerWebhook(conditions={}),
+        action=SpeakAction(text="x"),
+    )
+    tid = await scheduler.schedule(spec)
+    assert await scheduler.receive_hook(tid, {"value": 1}, "delivery-1") == "queued"
+    assert await scheduler.receive_hook(tid, {"value": 2}, "delivery-2") == "queued"
+    rows = await store.hooks.pending()
+    assert {row["delivery_id"] for row in rows} == {"delivery-1", "delivery-2"}
+
+    await asyncio.gather(*(scheduler._run_hook(row) for row in rows))
+
+    assert runner.dispatched == [tid]
+    status1 = await store.hooks._one(
+        "SELECT status FROM task_hook_deliveries WHERE task_id=? AND delivery_id=?",
+        (tid, "delivery-1"),
+    )
+    status2 = await store.hooks._one(
+        "SELECT status FROM task_hook_deliveries WHERE task_id=? AND delivery_id=?",
+        (tid, "delivery-2"),
+    )
+    assert {status1[0], status2[0]} == {"done", "pending"}
 
 
 async def test_on_event_filter_expr_blocks_non_match(
@@ -266,6 +332,27 @@ def test_filter_expr_rejects_dangerous_input() -> None:
 # ----------------------------------------------------------------------
 # Running-task cancellation (deep-dive 2026-07-15, H-03)
 # ----------------------------------------------------------------------
+
+async def test_pause_race_does_not_remove_running_task(
+    store: TaskStore, bus: EventBus, runner: FakeRunner
+) -> None:
+    scheduler = TaskScheduler(store=store, bus=bus, runner=runner)
+    spec = TaskSpec(
+        title="pause-race",
+        trigger=TriggerEvery(interval_seconds=60),
+        action=SpeakAction(text="x"),
+    )
+    tid = await scheduler.schedule(spec)
+    assert tid
+    task = await store.get(tid)
+    assert task is not None
+    assert await store.update_state(tid, "running", expected_state="scheduled")
+    with pytest.raises(TaskStateConflict):
+        await scheduler.pause(tid)
+    row = await store.get(tid)
+    assert row is not None
+    assert row["state"] == "running"
+
 
 async def test_cancel_task_fires_the_running_runs_token(
     store: TaskStore, bus: EventBus

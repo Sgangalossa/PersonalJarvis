@@ -81,9 +81,9 @@ List one agent's scheduled routines with ids, schedules, state and next run.
 - **Desktop UI section:** `agents`
 - **Voice example (EN):** "which routines does Scout have"
 
-## `society-create-routine` — Schedule a routine for an agent
+## `society-create-routine` — Schedule or trigger a routine for an agent
 
-The ONLY way to make an agent do something on a schedule (daily briefing, weekly report, every morning at 8). Never use create-skill for this. The prompt is the complete task the agent runs each time: sources, steps, output. Speak the returned next_run; on timezone_required ask the user.
+The ONLY way to make an agent do something on a schedule or event (daily briefing, weekly report, a merged PR webhook). Never use create-skill for this. The prompt is the complete task the agent runs each time: sources, steps, output. For webhooks, report that Connect webhook must configure the sender. For timed work speak next_run; on timezone_required ask the user.
 
 - **Endpoint:** `POST /api/society/agents/{agent_id}/routines`
 - **Arguments:** `agent_id` (string; required); `title` (string; required); `prompt` (string; required); `schedule` (object; required); `announce_on_success` (string; optional)

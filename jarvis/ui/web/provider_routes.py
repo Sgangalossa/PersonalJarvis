@@ -410,7 +410,7 @@ def _local_runtime_payload(
 
         status = local_status(spec.id, model_override=model_override)
     except Exception as exc:  # noqa: BLE001 — the provider list must never 500
-        log.debug("Local-runtime probe for %s failed (%s); reporting none.", spec.id, exc)
+        log.debug("Local-runtime probe for %s failed (%s); reporting none.", spec.id, type(exc).__name__)
         return None
     if status is None:
         return None
@@ -430,7 +430,7 @@ def _local_runtime_payload(
                 "detail": acc.detail,
             }
     except Exception as exc:  # noqa: BLE001 — the provider list must never 500
-        log.debug("Accelerator probe for %s failed (%s); reporting none.", spec.id, exc)
+        log.debug("Accelerator probe for %s failed (%s); reporting none.", spec.id, type(exc).__name__)
     return {
         "runtime": status.runtime,
         "engine_installed": status.engine_installed,
@@ -458,7 +458,7 @@ def _managed_server_payload(spec: ProviderSpec) -> dict[str, Any] | None:
 
         return server_status()
     except Exception as exc:  # noqa: BLE001 — the provider list must never 500
-        log.debug("Managed-server probe failed (%s); reporting none.", exc)
+        log.debug("Managed-server probe failed (%s); reporting none.", type(exc).__name__)
         return None
 
 
@@ -484,7 +484,7 @@ def _derived_alias_free(provider_id: str, models: list[Any]) -> list[Any]:
 
         kept = [m for m in models if not is_hidden_alias(getattr(m, "id", ""))]
     except Exception as exc:  # noqa: BLE001 — the picker must never 500
-        log.debug("Alias filter for %s failed (%s); listing all.", provider_id, exc)
+        log.debug("Alias filter for %s failed (%s); listing all.", provider_id, type(exc).__name__)
         return models
     if len(kept) != len(models):
         log.debug(
@@ -517,7 +517,7 @@ def _installed_local_models(provider_id: str, models: list[Any]) -> list[Any]:
             if getattr(m, "id", "") not in SHERPA_BUNDLES or bundle_present(getattr(m, "id", ""))
         ]
     except Exception as exc:  # noqa: BLE001 — the picker must never 500
-        log.debug("Local model filter for %s failed (%s); listing all.", provider_id, exc)
+        log.debug("Local model filter for %s failed (%s); listing all.", provider_id, type(exc).__name__)
         return models
     if len(kept) != len(models):
         log.debug(
@@ -540,7 +540,7 @@ def _pull_capable_ids() -> frozenset[str]:
 
         return PULL_CAPABLE_PROVIDERS
     except Exception as exc:  # noqa: BLE001 — the provider list must never 500
-        log.debug("Pull-capability lookup failed (%s); no card offers downloads.", exc)
+        log.debug("Pull-capability lookup failed (%s); no card offers downloads.", type(exc).__name__)
         return frozenset()
 
 
@@ -785,7 +785,7 @@ def _active_tts(request: Request) -> str | None:
         if _canonical_tts_name((configured or "").lower()) != resolved:
             return resolved
     except Exception as exc:  # noqa: BLE001 — the health panel must never 500
-        log.debug("resolved-provider health probe failed (%s); using configured.", exc)
+        log.debug("resolved-provider health probe failed (%s); using configured.", type(exc).__name__)
     return configured
 
 
@@ -814,7 +814,7 @@ def _active_stt(request: Request) -> str | None:
         if resolved and resolved != configured:
             return resolved
     except Exception as exc:  # noqa: BLE001 — the health panel must never 500
-        log.debug("resolved-provider health probe failed (%s); using configured.", exc)
+        log.debug("resolved-provider health probe failed (%s); using configured.", type(exc).__name__)
     return configured
 
 
@@ -835,7 +835,7 @@ def _active_realtime(request: Request) -> str | None:
 
         return realtime_available_provider(cfg)
     except Exception as exc:  # noqa: BLE001 -- the health panel must never 500
-        log.debug("active-realtime resolution failed (%s); using None.", exc)
+        log.debug("active-realtime resolution failed (%s); using None.", type(exc).__name__)
         return None
 
 
@@ -869,7 +869,7 @@ def _resolve_polish_subject(cfg: Any) -> str | None:
             return None
         return DICTATION_SPEC_ID_BY_FAMILY.get(chain[0].id)
     except Exception as exc:  # noqa: BLE001 — the health panel must never 500
-        log.debug("active-polish resolution failed (%s); using None.", exc)
+        log.debug("active-polish resolution failed (%s); using None.", type(exc).__name__)
         return None
 
 
@@ -896,7 +896,7 @@ def _polish_subject_key(cfg: Any) -> tuple[Any, ...] | None:
             *polish_chain_fingerprint(getattr(cfg, "dictation", None)),
         )
     except Exception as exc:  # noqa: BLE001 — an unfingerprintable host re-resolves
-        log.debug("polish subject key unavailable (%s); resolving afresh.", exc)
+        log.debug("polish subject key unavailable (%s); resolving afresh.", type(exc).__name__)
         return None
 
 
@@ -976,7 +976,7 @@ def _active_computer_use(request: Request) -> str | None:
             return provider
         return (getattr(brain_cfg, "primary", None) or "").strip() or None
     except Exception as exc:  # noqa: BLE001 — the health panel must never 500
-        log.debug("active-computer-use resolution failed (%s); using None.", exc)
+        log.debug("active-computer-use resolution failed (%s); using None.", type(exc).__name__)
         return None
 
 
@@ -1042,7 +1042,7 @@ def _realtime_provider_requires_offer(provider_id: str) -> bool:
 
         provider_cls = load("jarvis.realtime", provider_id, protocol=RealtimeProvider)
     except Exception as exc:  # noqa: BLE001 — an unloadable adapter needs no wait
-        log.debug("Realtime offer-capability probe skipped for %s: %s", provider_id, exc)
+        log.debug("Realtime offer-capability probe skipped for %s: %s", provider_id, type(exc).__name__)
         return False
     return bool(getattr(provider_cls, "requires_webrtc_offer", False))
 
@@ -1206,7 +1206,7 @@ def _apply_worker_model_in_memory(request: Request, model: str) -> None:
         else:
             sub.model = model
     except Exception as exc:  # noqa: BLE001 — frozen models / detached cfg are not errors
-        log.debug("In-memory worker.model update skipped: %s", exc)
+        log.debug("In-memory worker.model update skipped: %s", type(exc).__name__)
 
 
 async def _emit(request: Request, event: Any) -> None:
@@ -1216,7 +1216,7 @@ async def _emit(request: Request, event: Any) -> None:
     try:
         await bus.publish(event)
     except Exception as exc:  # noqa: BLE001
-        log.warning("Could not publish event: %s", exc)
+        log.warning("Could not publish event: %s", type(exc).__name__)
 
 
 def _bus_from_brain(request: Request):
@@ -1263,7 +1263,7 @@ async def list_providers(request: Request) -> dict[str, Any]:
             (getattr(stt_cfg, "device", "") or "cpu").strip().lower() or "cpu"
         )
     except Exception as exc:  # noqa: BLE001 — the provider list must never 500
-        log.debug("Local STT model override lookup failed (%s); using the default.", exc)
+        log.debug("Local STT model override lookup failed (%s); using the default.", type(exc).__name__)
 
     # Off the event loop: building the payload reads every secret slot from the
     # OS keyring and probes the Codex/Google CLI status — all synchronous. On the
@@ -1524,7 +1524,7 @@ def _current_credential_fingerprint(spec: ProviderSpec) -> str | None:
         try:
             value = cfg_mod.get_secret(slot, env)
         except Exception as exc:  # noqa: BLE001 — an unreadable keyring voids nothing
-            log.info("health: credential read for %s failed: %s", spec.id, exc)
+            log.info("health: credential read for %s failed: %s", spec.id, type(exc).__name__)
             return None
         if value:
             return _health_ledger.credential_fingerprint(value)
@@ -1650,7 +1650,7 @@ async def _tier_section_health(
             binary_path,
         )
     except Exception as exc:  # noqa: BLE001 — a failed presence check is "not set up", not a crash
-        log.info("section-health credential check for %s failed: %s", spec.id, exc)
+        log.info("section-health credential check for %s failed: %s", spec.id, type(exc).__name__)
         configured = False
     if not configured:
         if optional:
@@ -2172,7 +2172,7 @@ async def _compute_section_health(
         try:
             return await check
         except Exception as exc:  # noqa: BLE001
-            log.warning("section-health %s check failed: %s", section, exc)
+            log.warning("section-health %s check failed: %s", section, type(exc).__name__)
             return SectionHealth(
                 status=_section_health.UNKNOWN,
                 reason="error",
@@ -2273,7 +2273,7 @@ def _get_model_catalog(request: Request):
         try:
             request.app.state.model_catalog = cat
         except Exception as exc:  # noqa: BLE001 — detached app.state is not an error
-            log.debug("Could not stash model_catalog on app.state: %s", exc)
+            log.debug("Could not stash model_catalog on app.state: %s", type(exc).__name__)
     return cat
 
 
@@ -2316,7 +2316,7 @@ def _set_brain_model_in_memory(cfg: Any, provider: str, value: str) -> None:
             providers[provider] = pc
         pc.model = value or None
     except Exception as exc:  # noqa: BLE001 -- detached config is best-effort
-        log.debug("In-memory brain model update skipped for %s: %s", provider, exc)
+        log.debug("In-memory brain model update skipped for %s: %s", provider, type(exc).__name__)
 
 
 def _set_cu_model_in_memory(cfg: Any, provider: str, value: str) -> None:
@@ -2334,7 +2334,7 @@ def _set_cu_model_in_memory(cfg: Any, provider: str, value: str) -> None:
         pc.tool_model = value
         pc.cu_model = value
     except Exception as exc:  # noqa: BLE001 — frozen/detached cfg is acceptable
-        log.debug("In-memory cu_model update skipped for %s: %s", provider, exc)
+        log.debug("In-memory cu_model update skipped for %s: %s", provider, type(exc).__name__)
 
 
 #: Cloud model probe: a hosted model answers a 1-token prompt in seconds, and a
@@ -2561,7 +2561,7 @@ async def _apply_brain_model(
         try:
             applied_live = bool(brain.apply_provider_model(provider_id, model))
         except Exception as exc:  # noqa: BLE001
-            log.warning("Live model apply for %s failed: %s", provider_id, exc)
+            log.warning("Live model apply for %s failed: %s", provider_id, type(exc).__name__)
             applied_live = False
     restart_required = brain is None
 
@@ -2647,7 +2647,7 @@ def _apply_tts_selection(
             else:
                 cfg.tts.model = value  # type: ignore[attr-defined]
         except Exception as exc:  # noqa: BLE001 — frozen/detached cfg is not an error
-            log.debug("In-memory tts selection update skipped: %s", exc)
+            log.debug("In-memory tts selection update skipped: %s", type(exc).__name__)
 
     # Live-apply into the running SpeechPipeline (rebuild the TTS instance), so the
     # next ``_speak()`` uses the new voice without a restart.
@@ -2660,7 +2660,7 @@ def _apply_tts_selection(
             pipeline.set_tts(build_tts_from_config(cfg.tts))
             applied_live = True
         except Exception as exc:  # noqa: BLE001
-            log.error("TTS live re-apply for %s failed: %s", provider_id, exc, exc_info=True)
+            log.error("TTS live re-apply for %s failed: %s", provider_id, type(exc).__name__)
 
     _health_ledger.forget_providers(
         [provider_id], modality=_health_ledger.MODALITY_TTS, keep_credential_failures=True
@@ -2695,7 +2695,7 @@ def _apply_stt_model(
 
         on_device = provider_runs_on_device(provider_id)
     except Exception as exc:  # noqa: BLE001 — an unknown provider is treated as cloud
-        log.debug("STT on-device probe failed for %s (%s); treating as cloud.", provider_id, exc)
+        log.debug("STT on-device probe failed for %s (%s); treating as cloud.", provider_id, type(exc).__name__)
 
     persisted = False
     if body.persist:
@@ -2723,7 +2723,7 @@ def _apply_stt_model(
             if on_device:
                 cfg.stt.model = value  # type: ignore[attr-defined]
         except Exception as exc:  # noqa: BLE001
-            log.debug("In-memory stt model update skipped: %s", exc)
+            log.debug("In-memory stt model update skipped: %s", type(exc).__name__)
 
     _health_ledger.forget_providers(
         [provider_id], modality=_health_ledger.MODALITY_STT, keep_credential_failures=True
@@ -3016,7 +3016,7 @@ async def _finish_managed_server_warm(
         cancel_event.set()
         raise
     except Exception:  # noqa: BLE001 - background warming is best-effort
-        log.warning("managed local-realtime warm-up failed", exc_info=True)
+        log.warning("managed local-realtime warm-up failed")
 
 
 def _schedule_managed_server_warm(request: Request, base_url: str, command: str) -> None:
@@ -3721,7 +3721,7 @@ async def set_realtime_options(
             if voice is not None:
                 pc.voice = voice
         except Exception as exc:  # noqa: BLE001 — frozen/detached cfg is not an error
-            log.debug("In-memory realtime-options update skipped for %s: %s", provider_id, exc)
+            log.debug("In-memory realtime-options update skipped for %s: %s", provider_id, type(exc).__name__)
 
     await _emit(
         request,
@@ -3832,6 +3832,87 @@ async def _vertex_live_voice_sample(
 _vertex_live_voice_sample.requires_api_key = False  # type: ignore[attr-defined]
 
 
+async def _openai_live_voice_sample(
+    api_key: str, *, model: str, voice: str, text: str, language: str
+) -> tuple[bytes, int]:
+    """Sample GPT-Live using the same websocket transport as the live voice call."""
+    del language
+    import base64
+
+    from jarvis.core.protocols import ContinuousVoiceStart
+    from jarvis.plugins.realtime.openai_live import OpenAILiveProvider
+
+    provider = OpenAILiveProvider(api_key=api_key)
+    session = {
+        "model": model or "gpt-live-1",
+        "store": False,
+        "instructions": (
+            "You generate a short voice sample for a settings preview. "
+            "Read the supplied text verbatim and say nothing else."
+        ),
+        "audio": {"output": {"voice": voice}},
+        "output_modalities": ["audio"],
+    }
+    connection = await provider.open_session(
+        ContinuousVoiceStart(session=session, offer_sdp="")
+    )
+    pcm = bytearray()
+    try:
+        # The Live provider returns the opened websocket before consuming the
+        # session.started event; absorb that handshake before sending work.
+        while True:
+            event = await connection.receive()
+            if event.get("type") == "session.started":
+                break
+            if event.get("type") == "error":
+                message = str(
+                    ((event.get("error") or {}).get("message"))
+                    or "OpenAI Live rejected the preview session."
+                )
+                raise RuntimeError(message)
+
+        await connection.send(
+            {
+                "type": "response.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": text}],
+                },
+            }
+        )
+        await connection.send({"type": "response.create"})
+
+        while True:
+            event = await connection.receive()
+            kind = str(event.get("type") or "")
+            if kind == "session.output_audio.delta":
+                delta = event.get("delta")
+                if delta:
+                    pcm.extend(base64.b64decode(delta))
+                continue
+            if kind == "response.event":
+                inner = event.get("event") or {}
+                kind = str(inner.get("type") or "")
+            if kind in {"response.completed", "response.failed", "response.incomplete"}:
+                if kind != "response.completed":
+                    raise RuntimeError("OpenAI Live preview response did not complete.")
+                break
+            if kind == "error":
+                message = str(
+                    ((event.get("error") or {}).get("message"))
+                    or "OpenAI Live rejected the preview response."
+                )
+                raise RuntimeError(message)
+            if kind == "session.closed":
+                raise RuntimeError(
+                    "OpenAI Live closed before the preview response completed."
+                )
+    finally:
+        await connection.close()
+    return bytes(pcm), 24_000
+
+
 async def _openai_realtime_voice_sample(
     api_key: str, *, model: str, voice: str, text: str, language: str
 ) -> tuple[bytes, int]:
@@ -3927,7 +4008,7 @@ async def _openai_realtime_voice_sample(
 _REALTIME_PREVIEW_SAMPLERS: dict[str, Any] = {
     "gemini-live": _gemini_live_voice_sample,
     "vertex-live": _vertex_live_voice_sample,
-    "openai-realtime": _openai_realtime_voice_sample,
+    "openai-live": _openai_live_voice_sample,
 }
 
 
@@ -4092,7 +4173,7 @@ async def codex_set_binary_path(body: CodexBinaryPathBody, request: Request) -> 
         try:
             cfg.codex.binary_path = value  # type: ignore[attr-defined]
         except Exception as exc:  # noqa: BLE001
-            log.debug("In-memory Codex path update skipped: %s", exc)
+            log.debug("In-memory Codex path update skipped: %s", type(exc).__name__)
     return {"ok": True, "binary_path": value}
 
 
@@ -4467,7 +4548,7 @@ async def tts_switch(body: SwitchBody, request: Request) -> dict[str, Any]:
         try:
             cfg.tts.provider = body.provider  # type: ignore[attr-defined]
         except Exception as exc:  # noqa: BLE001 — a frozen model is not an error
-            log.debug("In-memory TTS provider update skipped: %s", exc)
+            log.debug("In-memory TTS provider update skipped: %s", type(exc).__name__)
 
     # Inject into the active SpeechPipeline. Headless or voice-disabled boots
     # retain the honest ``restart_required=true`` response.
@@ -4823,7 +4904,7 @@ async def stt_switch(body: SwitchBody, request: Request) -> dict[str, Any]:
         try:
             live_switched = bool(setter(body.provider, model=local_model))
         except Exception as exc:  # noqa: BLE001 — keep the old provider alive
-            log.error("STT live switch raised unexpectedly: %s", exc, exc_info=True)
+            log.error("STT live switch raised unexpectedly: %s", type(exc).__name__)
             live_switched = False
         if not live_switched:
             raise HTTPException(
@@ -4842,7 +4923,7 @@ async def stt_switch(body: SwitchBody, request: Request) -> dict[str, Any]:
             if local_model is not None:
                 stt_cfg.model = local_model
         except Exception as exc:  # noqa: BLE001 — a frozen model is not an error
-            log.debug("In-memory STT provider update skipped: %s", exc)
+            log.debug("In-memory STT provider update skipped: %s", type(exc).__name__)
 
     persisted = False
     if body.persist:
@@ -4981,7 +5062,7 @@ async def realtime_switch(body: SwitchBody, request: Request) -> dict[str, Any]:
         try:
             cfg.voice.profile = ""
         except Exception as exc:  # noqa: BLE001 - detached config is harmless
-            log.debug("In-memory voice.profile update skipped: %s", exc)
+            log.debug("In-memory voice.profile update skipped: %s", type(exc).__name__)
     if cfg is not None and getattr(cfg, "brain", None) is not None:
         try:
             realtime_cfg = getattr(cfg.brain, "realtime", None)
@@ -4992,7 +5073,7 @@ async def realtime_switch(body: SwitchBody, request: Request) -> dict[str, Any]:
             else:
                 realtime_cfg.provider = body.provider
         except Exception as exc:  # noqa: BLE001 — frozen/detached cfg is not an error
-            log.debug("In-memory realtime.provider update skipped: %s", exc)
+            log.debug("In-memory realtime.provider update skipped: %s", type(exc).__name__)
     await _emit(request, SecretConfigured(key="brain.realtime.provider", action="set"))
 
     from jarvis.ui.web.voice_runtime import (
@@ -5017,7 +5098,7 @@ async def realtime_switch(body: SwitchBody, request: Request) -> dict[str, Any]:
             if bool(voice_engine_status(request).get("session_active", False)):
                 await _await_transport_offer(_REALTIME_OFFER_WAIT_S)
         except Exception as exc:  # noqa: BLE001 — never block a switch on this
-            log.debug("Realtime offer pre-wait skipped: %s", exc)
+            log.debug("Realtime offer pre-wait skipped: %s", type(exc).__name__)
 
     session_restarted = profile_session_restarted or reconnect_realtime(
         request, reason=f"realtime_provider:{body.provider}"
@@ -5097,7 +5178,7 @@ async def computer_use_switch(body: SwitchBody, request: Request) -> dict[str, A
             cfg.brain.tool_model = tier_cfg
             cfg.brain.computer_use = tier_cfg
         except Exception as exc:  # noqa: BLE001 — frozen/detached cfg is not an error
-            log.debug("In-memory computer_use.provider update skipped: %s", exc)
+            log.debug("In-memory computer_use.provider update skipped: %s", type(exc).__name__)
 
     live_brain = getattr(request.app.state, "brain", None)
     manager_cfg = getattr(live_brain, "_config", None)
@@ -5109,7 +5190,7 @@ async def computer_use_switch(body: SwitchBody, request: Request) -> dict[str, A
             manager_cfg.brain.tool_model = manager_tier
             manager_cfg.brain.computer_use = manager_tier
         except Exception as exc:  # noqa: BLE001
-            log.debug("Live Tool Model provider update skipped: %s", exc)
+            log.debug("Live Tool Model provider update skipped: %s", type(exc).__name__)
     if hasattr(live_brain, "reactivate_provider"):
         live_brain.reactivate_provider(body.provider)
 

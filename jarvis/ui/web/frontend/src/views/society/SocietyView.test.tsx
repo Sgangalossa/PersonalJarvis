@@ -36,6 +36,7 @@ vi.mock("@/components/society/card/AgentCardOverlay", () => ({ AgentCardOverlay:
   </div>
 ) }));
 vi.mock("@/components/society/roster/RosterRail", () => ({ RosterRail: () => <div data-testid="roster" /> }));
+vi.mock("@/components/society/ledger/SocietyLedger", () => ({ SocietyLedger: () => <div data-testid="society-ledger">Ledger history</div> }));
 vi.mock("@/components/society/card/BuildingCardOverlay", () => ({ BuildingCardOverlay: () => null }));
 vi.mock("@/components/society/create/CreateAgentDialog", () => ({ CreateAgentDialog: ({ open, onClose }: any) => open ? <button onClick={onClose}>Close creator</button> : null }));
 
@@ -72,6 +73,18 @@ it("switches to Map and back without losing the selected agent or draft", async 
   expect(screen.getByText("Specialist")).toBeTruthy();
   expect(screen.getByLabelText("Draft")).toBe(draft);
   expect(draft.value).toBe("Unsent message");
+});
+
+it("opens the durable Ledger from the caption and from the office monitor", async () => {
+  render(<SocietyView />);
+  fireEvent.click(screen.getByRole("tab", { name: "society.world.mode_ledger" }));
+  expect(screen.getByTestId("society-ledger")).toBeTruthy();
+  expect(screen.queryByTestId("map")).toBeNull();
+
+  fireEvent.click(screen.getByRole("tab", { name: "society.world.mode_map" }));
+  fireEvent.click(await screen.findByText("Map fallback"));
+  expect(screen.getByTestId("society-ledger")).toBeTruthy();
+  expect(screen.queryByTestId("map")).toBeNull();
 });
 
 it("restores the most recently selected agent after the view is remounted", () => {
@@ -114,6 +127,37 @@ it("keeps the Map/Agents switch in the caption in both modes", async () => {
   expect(screen.queryByTestId("map")).toBeNull();
   expect(screen.getByTestId("mode-switch")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "settings_hub.back_to_app" })).toBeNull();
+});
+
+it("supports roving keyboard navigation across Map, Agents, and Ledger tabs", () => {
+  render(<SocietyView />);
+  const switcher = screen.getByTestId("mode-switch");
+  const map = within(switcher).getByRole("tab", { name: "society.world.mode_map" });
+  const agents = within(switcher).getByRole("tab", { name: "society.roster.title" });
+  const ledger = within(switcher).getByRole("tab", { name: "society.world.mode_ledger" });
+
+  expect(agents.tabIndex).toBe(0);
+  expect(map.tabIndex).toBe(-1);
+  expect(ledger.tabIndex).toBe(-1);
+
+  agents.focus();
+  fireEvent.keyDown(agents, { key: "ArrowRight" });
+  expect(document.activeElement).toBe(ledger);
+  expect(ledger.getAttribute("aria-selected")).toBe("true");
+  expect(ledger.tabIndex).toBe(0);
+  expect(agents.tabIndex).toBe(-1);
+
+  fireEvent.keyDown(ledger, { key: "Home" });
+  expect(document.activeElement).toBe(map);
+  expect(map.getAttribute("aria-selected")).toBe("true");
+
+  fireEvent.keyDown(map, { key: "ArrowLeft" });
+  expect(document.activeElement).toBe(ledger);
+  expect(ledger.getAttribute("aria-selected")).toBe("true");
+
+  fireEvent.keyDown(ledger, { key: "End" });
+  expect(document.activeElement).toBe(ledger);
+  expect(ledger.getAttribute("aria-selected")).toBe("true");
 });
 
 it("navigates back through the window caption instead of a sections toggle", () => {

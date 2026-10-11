@@ -546,7 +546,7 @@ async def _run_headless(args) -> int:
     except Exception as exc:  # noqa: BLE001 — never block boot on key bootstrap
         import logging as _logging
 
-        _logging.getLogger(__name__).warning("Control API key bootstrap skipped: %s", exc)
+        _logging.getLogger(__name__).warning("Control API key bootstrap skipped (%s)", type(exc).__name__)
 
     def _reconcile_autostart_bg() -> None:
         try:
@@ -2147,7 +2147,7 @@ def _main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001 — never block boot on key bootstrap
         import logging as _logging
 
-        _logging.getLogger(__name__).warning("Control API key bootstrap skipped: %s", exc)
+        _logging.getLogger(__name__).warning("Control API key bootstrap skipped (%s)", type(exc).__name__)
     _m_mark("control_key")
 
     # Self-healing login autostart (the 7th cross-platform port). Runs once at

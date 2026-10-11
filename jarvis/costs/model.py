@@ -35,6 +35,10 @@ from typing import Any, Literal
 
 SURFACE_VOICE = "voice"
 SURFACE_AGENT_CHAT = "agent-chat"
+#: Canonical chats owned by Society agents. They share the agent-chat store,
+#: but are a distinct spend surface so the Society ledger and global Costs
+#: section read the same authoritative rows.
+SURFACE_SOCIETY = "society"
 SURFACE_MISSION = "mission"
 #: The speech layer. Its own surface because it does not bill by token:
 #: hearing costs audio seconds, speaking costs characters.
@@ -82,6 +86,7 @@ ROLES: tuple[str, ...] = (
 SURFACES: tuple[str, ...] = (
     SURFACE_VOICE,
     SURFACE_AGENT_CHAT,
+    SURFACE_SOCIETY,
     SURFACE_MISSION,
     SURFACE_AGENTIC_IDE,
     SURFACE_JARVIS_VOICE,
@@ -138,6 +143,7 @@ SUBSCRIPTION_RUNNERS: frozenset[str] = frozenset(
         "codex-cli",
         "agy-cli",
         "kimi-cli",
+        "glm-cli",
         # NOT grok-cli: Grok Build runs on the user's xAI key and records what
         # it billed per turn (costUsdTicks) — money that moved, not a seat.
     }
@@ -172,6 +178,10 @@ class CostEntry:
     #: them because a character and a token are different units (BUG-177).
     chars: int = 0
     audio_ms: int = 0
+    # Internal runner identity for source reconciliation; not exposed in to_dict().
+    runner: str = ""
+    # Owning CLI account when the source can identify it.
+    account_id: str = ""
 
     @property
     def tokens_total(self) -> int:
@@ -203,6 +213,7 @@ class CostEntry:
             "label": self.label,
             "chars": self.chars,
             "audio_ms": self.audio_ms,
+            "account_id": self.account_id,
         }
 
 

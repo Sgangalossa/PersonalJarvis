@@ -89,6 +89,23 @@ def test_a_stage_that_cannot_instantiate_is_skipped(
     assert fake.attempts[-1] == ("openai", "gpt-5.5-pro")
 
 
+def test_resolve_frontier_error_does_not_expose_exception_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _SecretFailureRegistry:
+        def instantiate(self, provider: str, **kwargs: object) -> object:
+            raise RuntimeError("api_key=must-not-escape")
+
+    monkeypatch.setattr(resolver, "_resolve_chain", lambda cfg: [("gemini", "model-x")])
+    monkeypatch.setattr(resolver, "_get_registry", lambda: _SecretFailureRegistry())
+
+    with pytest.raises(RuntimeError) as caught:
+        resolver.resolve_frontier_brain(object())
+
+    assert "RuntimeError" in str(caught.value)
+    assert "api_key=must-not-escape" not in str(caught.value)
+
+
 def test_a_broken_chain_yields_nothing_rather_than_raising(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

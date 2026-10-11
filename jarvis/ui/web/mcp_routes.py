@@ -25,7 +25,6 @@ from jarvis.core.config import get_secret, set_secret
 from jarvis.core.events import BrainToolsChanged
 from jarvis.mcp import state as mcp_state
 from jarvis.mcp.registry import BOOTSTRAP_SERVERS, MCPRegistry, MCPServerSpec
-from jarvis.ui.web.error_text import diagnostic_text
 
 log = logging.getLogger(__name__)
 
@@ -132,7 +131,7 @@ async def _sync_tools_for_server(
                 adapter = MCPToolAdapter(client, mcp_tool, risk_tier=risk_tier)
                 tool_registry[adapter.name] = adapter
         except Exception as exc:  # noqa: BLE001
-            log.warning("Tool registry sync for %s failed: %s", server_name, exc)
+            log.warning("Tool registry sync for %s failed (%s)", server_name, type(exc).__name__)
 
 
 async def _publish_brain_tools_changed(request: Request, reason: str) -> None:
@@ -154,7 +153,7 @@ async def _publish_brain_tools_changed(request: Request, reason: str) -> None:
         else:
             bus.publish(event)
     except Exception as exc:  # noqa: BLE001
-        log.debug("BrainToolsChanged publish failed: %s", exc)
+        log.debug("BrainToolsChanged publish failed (%s)", type(exc).__name__)
 
 
 # ----------------------------------------------------------------------
@@ -237,7 +236,7 @@ async def enable_mcp(name: str, request: Request) -> dict[str, Any]:
     try:
         await registry.start_enabled([name])
     except Exception as exc:  # noqa: BLE001
-        log.warning("Enable-start of %s failed: %s", name, exc)
+        log.warning("Enable-start of %s failed (%s)", name, type(exc).__name__)
 
     # Check success: is the client in active_clients + no error?
     if name not in registry.active_clients():
@@ -271,7 +270,7 @@ async def disable_mcp(name: str, request: Request) -> dict[str, Any]:
         try:
             await active[name].stop()
         except Exception as exc:  # noqa: BLE001
-            log.warning("Stop of %s failed: %s", name, exc)
+            log.warning("Stop of %s failed (%s)", name, type(exc).__name__)
         # Clean up the registry slot
         registry._clients.pop(name, None)  # noqa: SLF001
 
@@ -297,7 +296,8 @@ async def start_mcp(name: str, request: Request) -> dict[str, Any]:
     try:
         await registry.start_enabled([name])
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(500, f"Start failed: {exc}") from exc
+        log.warning("MCP start failed for %s (%s)", name, type(exc).__name__)
+        raise HTTPException(500, "MCP server start failed.") from exc
 
     await _sync_tools_for_server(request, registry, name, adding=True)
     await _publish_brain_tools_changed(request, f"mcp_started:{name}")
@@ -322,7 +322,7 @@ async def stop_mcp(name: str, request: Request) -> dict[str, Any]:
     try:
         await active[name].stop()
     except Exception as exc:  # noqa: BLE001
-        log.warning("Stop of %s failed: %s", name, exc)
+        log.warning("Stop of %s failed (%s)", name, type(exc).__name__)
     registry._clients.pop(name, None)  # noqa: SLF001
 
     await _sync_tools_for_server(request, registry, name, adding=False)
@@ -345,7 +345,7 @@ async def import_claude_desktop(request: Request) -> dict[str, Any]:
             try:
                 registry.register_spec(MCPServerSpec(**spec_dict))
             except Exception as exc:  # noqa: BLE001
-                log.warning("Custom spec %s could not be registered: %s", name, exc)
+                log.warning("Custom spec %s could not be registered (%s)", name, type(exc).__name__)
 
     return {"ok": True, "count": count, "added": names, "note": note}
 
@@ -383,8 +383,8 @@ async def check_mcp(name: str, request: Request) -> dict[str, Any]:
                 "note": "already connected",
             }
         except Exception as exc:  # noqa: BLE001
-            log.warning("MCP probe of %s failed", name, exc_info=True)
-            msg = diagnostic_text(exc)
+            log.warning("MCP probe of %s failed (%s)", name, type(exc).__name__)
+            msg = f"MCP probe failed ({type(exc).__name__})."
             registry._errors[name] = msg  # noqa: SLF001
             return {"ok": False, "tools_count": 0, "error": msg}
 
@@ -401,8 +401,8 @@ async def check_mcp(name: str, request: Request) -> dict[str, Any]:
         registry.clear_error(name)
         return {"ok": True, "tools_count": len(tools), "error": None}
     except Exception as exc:  # noqa: BLE001
-        log.warning("MCP probe of %s failed", name, exc_info=True)
-        msg = diagnostic_text(exc)
+        log.warning("MCP probe of %s failed (%s)", name, type(exc).__name__)
+        msg = f"MCP probe failed ({type(exc).__name__})."
         registry._errors[name] = msg  # noqa: SLF001
         return {"ok": False, "tools_count": 0, "error": msg}
     finally:

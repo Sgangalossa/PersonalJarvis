@@ -337,6 +337,7 @@ class AgentChatService:
         permission_mode: str = "",
         title: str = "",
         surface: str = DEFAULT_SURFACE,
+        account_id: str = "",
     ) -> AgentChatSession:
         row = provider_row(provider)
         if row is None and not supports_api_runner(provider):
@@ -361,6 +362,7 @@ class AgentChatService:
             permission_mode=permission_mode,
             title=title,
             surface=surface,
+            account_id=account_id,
         )
 
     def is_running(self, session_id: str) -> bool:
@@ -432,10 +434,23 @@ class AgentChatService:
             self._subscribers.pop(session_id, None)
 
     async def post_notice(self, session_id: str, payload: dict[str, Any]) -> None:
-        """A system line in a session's timeline that is not a turn: the agent
-        society posts learned skills, login requests and queued approvals here.
-        Stored like any event (kind ``notice``) so a reopened chat still shows it."""
+        """Persist a system line in a session's timeline."""
         await self._emit(session_id, make_event("notice", dict(payload)))
+
+    async def post_notice_once(
+        self, session_id: str, payload: dict[str, Any], *, dedupe_key: str
+    ) -> bool:
+        """Persist and publish a durable notice exactly once across processes."""
+        stored = await asyncio.to_thread(
+            self.store.append_notice_once,
+            session_id,
+            payload,
+            dedupe_key=dedupe_key,
+        )
+        if stored is None:
+            return False
+        self._publish_stored_event(session_id, stored)
+        return True
 
     async def _emit(self, session_id: str, event: dict[str, Any]) -> None:
         # One delivery path for every runner. Normalize only finished receipts;
@@ -474,9 +489,12 @@ class AgentChatService:
 
     def _publish_event(self, session_id: str, event: dict[str, Any]) -> None:
         stored = self.store.append_event(session_id, event)
+        self._publish_stored_event(session_id, stored)
+
+    def _publish_stored_event(self, session_id: str, event: dict[str, Any]) -> None:
         for q in list(self._subscribers.get(session_id, ())):
             try:
-                q.put_nowait(stored)
+                q.put_nowait(event)
             except asyncio.QueueFull:
                 # A reader that stopped draining is dropped: the WS handler
                 # re-syncs from the store when it reconnects.
@@ -489,11 +507,17 @@ class AgentChatService:
         """Persist a trusted internal message even while its receiving chat is busy."""
         if self.store.get_session(session_id) is None:
             raise NoSuchSession(session_id)
-        existing = self.store.incoming_message(session_id, incoming.message_id)
-        if existing is not None:
-            return existing
-        await self._emit(session_id, make_event("agent_message", incoming.model_dump()))
-        return incoming.model_dump()
+        stored = await asyncio.to_thread(
+            self.store.append_agent_message_once,
+            session_id,
+            incoming.model_dump(),
+        )
+        if stored is None:
+            return self.store.incoming_message(session_id, incoming.message_id) or incoming.model_dump()
+        publish = getattr(self, "_publish_stored_event", None)
+        if publish is not None:
+            publish(session_id, stored)
+        return stored["payload"]
 
     async def message_status(
         self, session_id: str, message_id: str, status: str, *, turn_id: str = "", error: str = ""
@@ -635,6 +659,12 @@ class AgentChatService:
         cancel = asyncio.Event()
         run = _Running(turn_id, cancel)
         self._running[session_id] = run
+        if session.surface == "jarvis" and direct_user and incoming is None and not control_owned:
+            from .store import ChatSelection
+
+            self.store.save_chat_selection(
+                ChatSelection(session.provider, session.model, session.effort, session.account_id)
+            )
         from jarvis.core.tool_read_only import set_chat_read_only
 
         set_chat_read_only(session_id, session.permission_mode in ("plan", "read-only"))

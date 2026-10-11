@@ -131,6 +131,8 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 AGENT_CLAUDE = "claude-cli"
+AGENT_GLM = "glm-cli"
+"""GLM Coding Plan, using Claude Code protocol against Z.ai with its own config root."""
 """Claude Code. Same spelling as ``jarvis.costs.model.SUBSCRIPTION_RUNNERS``."""
 
 AGENT_CODEX = "codex-cli"
@@ -168,6 +170,7 @@ identity. Not a subscription: the recorded cost is the bill."""
 
 AGENTS: tuple[str, ...] = (
     AGENT_CLAUDE,
+    AGENT_GLM,
     AGENT_CODEX,
     AGENT_KIMI,
     AGENT_AGY,
@@ -188,11 +191,10 @@ COST_READER_FOR_HARNESS: dict[str, str] = {
     "antigravity": AGENT_AGY,
     "grok-build": AGENT_GROK,
     "opencode": AGENT_OPENCODE,
-    # GLM runs the Claude Code binary against z.ai with the same config
-    # directory, so its sessions land in ~/.claude and are read — and priced —
-    # as Claude Code. Attributing them to z.ai needs a config dir of their own
-    # at spawn (docs/BUGS.md BUG-178, still open).
-    "glm": AGENT_CLAUDE,
+    # GLM runs the Claude Code binary against z.ai in its dedicated
+    # config root, so its sessions are indexed and priced under a distinct
+    # runner identity rather than the user's real Claude Code account.
+    "glm": AGENT_GLM,
 }
 HARNESSES_WITHOUT_LOCAL_TRANSCRIPT: dict[str, str] = {
     "deepseek-harness": (
@@ -274,11 +276,11 @@ _ROLLOUT_ID = re.compile(r"([0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}
 #   5 — the index became a ledger: vanished transcripts keep their rows, a
 #       bump re-reads instead of rebuilding, and a path index was added.
 #       Nothing about a row changed.
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 #: Rows written under a version below this were counted under a rule that has
 #: since changed and are re-read from their transcripts where those still
 #: exist. Rows from this version on are right as they are.
-_REREAD_BELOW = 4
+_REREAD_BELOW = 6
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS indexed_files (
@@ -291,7 +293,8 @@ CREATE TABLE IF NOT EXISTS indexed_files (
     model       TEXT NOT NULL DEFAULT '',
     cwd         TEXT NOT NULL DEFAULT '',
     label       TEXT NOT NULL DEFAULT '',
-    scanned_ms  INTEGER NOT NULL DEFAULT 0
+    scanned_ms  INTEGER NOT NULL DEFAULT 0,
+    account_id  TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS cli_turns (
     agent         TEXT NOT NULL,
@@ -306,6 +309,7 @@ CREATE TABLE IF NOT EXISTS cli_turns (
     cwd           TEXT NOT NULL DEFAULT '',
     label         TEXT NOT NULL DEFAULT '',
     cost_usd      REAL NOT NULL DEFAULT 0,
+    account_id    TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (agent, dedup_key)
 );
 CREATE INDEX IF NOT EXISTS idx_cli_turns_ts ON cli_turns (ts_ms);
@@ -323,8 +327,8 @@ CREATE INDEX IF NOT EXISTS idx_cli_turns_path ON cli_turns (path);
 _INSERT_TURN = (
     "INSERT INTO cli_turns "
     "(agent, dedup_key, path, session_id, ts_ms, model, "
-    " tokens_in, tokens_out, tokens_cached, cwd, label, cost_usd) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+    " tokens_in, tokens_out, tokens_cached, cwd, label, cost_usd, account_id) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
     "ON CONFLICT(agent, dedup_key) DO UPDATE SET "
     " session_id = CASE WHEN cli_turns.path = excluded.path"
     "   THEN excluded.session_id ELSE cli_turns.session_id END,"
@@ -342,6 +346,8 @@ _INSERT_TURN = (
     "   THEN excluded.label ELSE cli_turns.label END,"
     " cost_usd = CASE WHEN cli_turns.path = excluded.path"
     "   THEN excluded.cost_usd ELSE cli_turns.cost_usd END,"
+    " account_id = CASE WHEN cli_turns.path = excluded.path"
+    "   THEN excluded.account_id ELSE cli_turns.account_id END,"
     " model = CASE WHEN excluded.model <> ''"
     "   AND (cli_turns.path = excluded.path OR cli_turns.model = '')"
     "   THEN excluded.model ELSE cli_turns.model END "
@@ -351,12 +357,13 @@ _INSERT_TURN = (
 
 _UPSERT_FILE = (
     "INSERT INTO indexed_files "
-    "(path, agent, session_id, size, mtime_ns, byte_offset, model, cwd, label, scanned_ms) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+    "(path, agent, session_id, size, mtime_ns, byte_offset, model, cwd, label, scanned_ms, account_id) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
     "ON CONFLICT(path) DO UPDATE SET "
     "agent=excluded.agent, session_id=excluded.session_id, size=excluded.size, "
     "mtime_ns=excluded.mtime_ns, byte_offset=excluded.byte_offset, model=excluded.model, "
-    "cwd=excluded.cwd, label=excluded.label, scanned_ms=excluded.scanned_ms"
+    "cwd=excluded.cwd, label=excluded.label, scanned_ms=excluded.scanned_ms, "
+    "account_id=excluded.account_id"
 )
 
 
@@ -386,6 +393,8 @@ class CliTurn:
     #: What the CLI itself priced the call at, when it does (OpenCode). 0.0
     #: for the seat-driven CLIs, whose bill is derived from the rate tables.
     cost_usd: float = 0.0
+    #: Stable account identity for the transcript root; empty when unknown.
+    account_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -410,6 +419,7 @@ class CliRollup:
     cwd: str
     label: str
     cost_usd: float = 0.0
+    account_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -548,6 +558,7 @@ class _Candidate:
     agent: str
     size: int
     mtime_ns: int
+    account_id: str = ""
 
 
 def _account_roots(platform: str) -> list[Path]:
@@ -597,6 +608,15 @@ def _dedup_paths(paths: list[Path]) -> list[Path]:
             seen.add(key)
             out.append(path)
     return out
+
+
+def _glm_roots(home: Path | None) -> list[Path]:
+    """GLM Claude Code transcripts, isolated from the real Claude root."""
+    if home is not None:
+        return [home / ".jarvis-glm-claude"]
+    from jarvis.workspace.agents import glm_config_dir
+
+    return [glm_config_dir()]
 
 
 def _claude_roots(home: Path | None) -> list[Path]:
@@ -676,6 +696,7 @@ def _grok_roots(home: Path | None) -> list[Path]:
 #: that can hold transcripts.
 _LAYOUTS: tuple[tuple[str, str], ...] = (
     (AGENT_CLAUDE, "projects/*/*.jsonl"),
+    (AGENT_GLM, "projects/*/*.jsonl"),
     # The subagents a session spawned: ``<session>/subagents/agent-<id>.jsonl``
     # for the Agent tool, one level deeper under ``workflows/<run>/`` for a
     # workflow. ``**`` covers both and whatever depth a later CLI adds.
@@ -699,6 +720,8 @@ _LAYOUTS: tuple[tuple[str, str], ...] = (
 def _roots_for(agent: str, home: Path | None) -> list[Path]:
     if agent == AGENT_CLAUDE:
         return _claude_roots(home)
+    if agent == AGENT_GLM:
+        return _glm_roots(home)
     if agent == AGENT_CODEX:
         return _codex_roots(home)
     if agent == AGENT_GROK:
@@ -739,6 +762,32 @@ def _sqlite_stat(path: Path) -> tuple[int, int]:
     return size + wal.st_size, max(mtime_ns, wal.st_mtime_ns)
 
 
+def _account_id_for_root(agent: str, root: Path) -> str:
+    """Return the registered account owning one CLI config root."""
+    if agent == AGENT_GLM:
+        return "glm:default"
+    platform_by_agent = {
+        AGENT_CLAUDE: "claude",
+        AGENT_CODEX: "codex",
+        AGENT_GROK: "grok-build",
+    }
+    platform = platform_by_agent.get(agent)
+    if platform is None:
+        return ""
+    try:
+        from jarvis import agent_accounts
+
+        target = _key_of(root)
+        if target == _key_of(agent_accounts.native_dir(platform)):
+            return agent_accounts.builtin_id(platform)
+        for account in agent_accounts.list_accounts(platform):
+            if _key_of(Path(account.config_dir)) == target:
+                return str(account.id)
+    except Exception as exc:  # noqa: BLE001 - attribution must never stop indexing
+        log.debug("cli usage index: account lookup failed for %s (%s)", agent, exc)
+    return ""
+
+
 def _discover(home: Path | None) -> list[_Candidate]:
     """Every transcript on this machine, with its size and mtime.
 
@@ -774,6 +823,7 @@ def _discover(home: Path | None) -> list[_Candidate]:
                     agent=agent,
                     size=size,
                     mtime_ns=mtime_ns,
+                    account_id=_account_id_for_root(agent, root),
                 )
     return list(found.values())
 
@@ -1560,7 +1610,7 @@ def _scan(cand: _Candidate, start: int, cursor: _Cursor, deadline: float) -> _Fi
 
 def _wanted(agent: str, raw: bytes) -> bool:
     """The pre-filter that keeps gigabytes of JSON out of ``json.loads``."""
-    if agent == AGENT_CLAUDE:
+    if agent in (AGENT_CLAUDE, AGENT_GLM):
         return _CLAUDE_MARK in raw
     if agent == AGENT_CODEX:
         return any(mark in raw for mark in _CODEX_MARKS)
@@ -1574,7 +1624,7 @@ def _wanted(agent: str, raw: bytes) -> bool:
 def _row_for(
     agent: str, record: Mapping[str, Any], offset: int, cand: _Candidate, cursor: _Cursor
 ) -> _Row | _PricedRow | None:
-    if agent == AGENT_CLAUDE:
+    if agent in (AGENT_CLAUDE, AGENT_GLM):
         return _claude_row(record, cand, cursor)
     if agent == AGENT_CODEX:
         return _codex_row(record, offset, cand, cursor)
@@ -1641,6 +1691,11 @@ def _migrate(conn: sqlite3.Connection, version: int) -> None:
     if version == 0 and not _has_rows(conn):
         return
     columns = {r[1] for r in conn.execute("PRAGMA table_info(cli_turns)")}
+    file_columns = {r[1] for r in conn.execute("PRAGMA table_info(indexed_files)")}
+    if "account_id" not in columns:
+        conn.execute("ALTER TABLE cli_turns ADD COLUMN account_id TEXT NOT NULL DEFAULT ''")
+    if "account_id" not in file_columns:
+        conn.execute("ALTER TABLE indexed_files ADD COLUMN account_id TEXT NOT NULL DEFAULT ''")
     if "cost_usd" not in columns:
         # 3: OpenCode writes its own price. Additive.
         conn.execute("ALTER TABLE cli_turns ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0")
@@ -1755,13 +1810,63 @@ def _forget_vanished(
         known.pop(key, None)
 
 
+def _rebind_changed_accounts(
+    conn: sqlite3.Connection,
+    candidates: Sequence[_Candidate],
+    known: Mapping[str, sqlite3.Row],
+) -> None:
+    """Move unchanged transcript rows to their current registered account.
+
+    Account ownership can change without a single byte changing in the CLI
+    transcript. Re-reading that file is both unnecessary and unsafe under a
+    short refresh deadline: attribution is metadata, not transcript content.
+    Update the ledger and its resume row together, so the next refresh sees the
+    new owner and can skip the file normally.
+    """
+    for cand in candidates:
+        row = known.get(cand.key)
+        if row is None:
+            continue
+        previous = str(row["account_id"] or "")
+        if previous == cand.account_id:
+            continue
+        savepoint = "rebind_account"
+        try:
+            conn.execute(f"SAVEPOINT {savepoint}")
+            conn.execute(
+                "UPDATE cli_turns SET account_id = ? WHERE path = ?",
+                (cand.account_id, cand.key),
+            )
+            conn.execute(
+                "UPDATE indexed_files SET account_id = ? WHERE path = ?",
+                (cand.account_id, cand.key),
+            )
+            conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+        except sqlite3.Error as exc:
+            try:
+                conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+            except sqlite3.Error:
+                log.debug(
+                    "cli usage index: account rebind savepoint cleanup failed for %s",
+                    cand.key,
+                    exc_info=True,
+                )
+            log.warning(
+                "cli usage index: could not rebind account for %s (%s)",
+                cand.key,
+                exc,
+            )
+
+
+
 def _resume_rows(conn: sqlite3.Connection) -> dict[str, sqlite3.Row]:
     try:
         return {
             str(row["path"]): row
             for row in conn.execute(
                 "SELECT path, agent, session_id, size, mtime_ns, byte_offset, "
-                "       model, cwd, label FROM indexed_files"
+                "       model, cwd, label, account_id FROM indexed_files"
             )
         }
     except sqlite3.Error as exc:
@@ -1815,6 +1920,8 @@ def refresh(
     try:
         known = _resume_rows(conn)
         _forget_vanished(conn, candidates, known, home)
+        _rebind_changed_accounts(conn, candidates, known)
+        known = _resume_rows(conn)
         pending = _pending(candidates, known, since_ms)
         # Newest first: the file a user just closed is the one whose numbers
         # they are looking at, and it is the one most likely to be small.
@@ -1881,7 +1988,7 @@ def entries(
     try:
         for row in conn.execute(
             "SELECT agent, session_id, ts_ms, model, tokens_in, tokens_out, "
-            "       tokens_cached, cwd, label, cost_usd FROM cli_turns "
+            "       tokens_cached, cwd, label, cost_usd, account_id FROM cli_turns "
             "WHERE ts_ms BETWEEN ? AND ? ORDER BY ts_ms",
             (since_ms, until_ms),
         ):
@@ -1895,6 +2002,7 @@ def entries(
                 tokens_cached=_int(row["tokens_cached"]),
                 cwd=str(row["cwd"] or ""),
                 label=str(row["label"] or ""),
+                account_id=str(row["account_id"] or ""),
                 cost_usd=float(row["cost_usd"] or 0.0),
             )
     except sqlite3.Error as exc:
@@ -1924,13 +2032,13 @@ def rollups(
         return
     try:
         for row in conn.execute(
-            "SELECT agent, session_id, model, "
+            "SELECT agent, account_id, session_id, model, "
             "       MIN(ts_ms) AS ts_ms, "
             "       SUM(tokens_in) AS tokens_in, SUM(tokens_out) AS tokens_out, "
             "       SUM(tokens_cached) AS tokens_cached, COUNT(*) AS turns, "
             "       MIN(cwd) AS cwd, MIN(label) AS label, SUM(cost_usd) AS cost_usd "
             "FROM cli_turns WHERE ts_ms BETWEEN ? AND ? "
-            "GROUP BY agent, session_id, model, ts_ms / ? "
+            "GROUP BY agent, account_id, session_id, model, ts_ms / ? "
             "ORDER BY ts_ms",
             (since_ms, until_ms, bucket),
         ):
@@ -1945,6 +2053,7 @@ def rollups(
                 turns=_int(row["turns"]),
                 cwd=str(row["cwd"] or ""),
                 label=str(row["label"] or ""),
+                account_id=str(row["account_id"] or ""),
                 cost_usd=float(row["cost_usd"] or 0.0),
             )
     except sqlite3.Error as exc:
@@ -2073,7 +2182,14 @@ def _commit_file(conn: sqlite3.Connection, cand: _Candidate, scan: _FileScan) ->
     try:
         before = _rows_of(conn, cand.key)
         if scan.rows:
-            priced = [r if len(r) == 12 else (*r, 0.0) for r in scan.rows]
+            priced = [
+                (*r, 0.0, cand.account_id)
+                if len(r) == 11
+                else (*r, cand.account_id)
+                if len(r) == 12
+                else r
+                for r in scan.rows
+            ]
             conn.executemany(_INSERT_TURN, priced)
         added = _rows_of(conn, cand.key) - before
         if scan.cursor.model:
@@ -2097,6 +2213,7 @@ def _commit_file(conn: sqlite3.Connection, cand: _Candidate, scan: _FileScan) ->
                 scan.cursor.cwd,
                 scan.cursor.label,
                 int(time.time() * 1000),
+                cand.account_id,
             ),
         )
         conn.commit()

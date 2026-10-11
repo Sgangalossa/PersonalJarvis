@@ -98,6 +98,10 @@ class WebServer:
     def __init__(self, cfg: JarvisConfig, bus: EventBus | None = None) -> None:
         self.cfg = cfg
         self._browser_prepare_task: asyncio.Task[None] | None = None
+        # Deferred boot work belongs to this server instance. Explicit handles
+        # let stop() drain it before pytest/asyncio tears the event loop down.
+        self._anyio_pool_warm_task: asyncio.Task[None] | None = None
+        self._deferred_reload_task: asyncio.Task[None] | None = None
         self.bus = bus if bus is not None else get_default_bus()
         self._clients: dict[str, WebSocket] = {}
         self._client_send_locks: dict[str, asyncio.Lock] = {}
@@ -147,6 +151,9 @@ class WebServer:
         # headless/browser-only boot path gets the same warm the desktop shell
         # runs. Cancelled in stop().
         self._realtime_warm_task: asyncio.Task[None] | None = None
+        # Off-loop event-loop liveness watchdog. Created/stopped with the
+        # WebServer lifecycle; it never runs until the event loop is operational.
+        self._loop_watchdog: Any | None = None
         # Board stack is populated in _setup_board() (in the _build_app path).
         self._board_aggregator: Any | None = None
         self._board_aggregator_task: asyncio.Task[None] | None = None
@@ -756,7 +763,34 @@ class WebServer:
                 return
             logger.info("anyio worker pool warmed: {} thread(s) resident", resident)
 
-        asyncio.create_task(_warm(), name="anyio-pool-warm")
+        self._anyio_pool_warm_task = asyncio.create_task(
+            _warm(), name="anyio-pool-warm"
+        )
+
+    def _start_loop_watchdog(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Watch the live event loop from a daemon thread after serving starts."""
+        if self._loop_watchdog is not None:
+            return
+        try:
+            from jarvis.core.loop_watchdog import EventLoopWatchdog
+
+            watchdog = EventLoopWatchdog(loop)
+            watchdog.start()
+            self._loop_watchdog = watchdog
+            logger.debug("Event-loop watchdog started")
+        except Exception as exc:  # noqa: BLE001 - diagnostics must never block boot
+            logger.warning("Event-loop watchdog could not start: {}", exc)
+
+    def _stop_loop_watchdog(self) -> None:
+        """Stop the off-loop watchdog before shutdown work can look like a stall."""
+        watchdog = getattr(self, "_loop_watchdog", None)
+        self._loop_watchdog = None
+        if watchdog is None:
+            return
+        try:
+            watchdog.stop()
+        except Exception as exc:  # noqa: BLE001 - shutdown remains best-effort
+            logger.warning("Event-loop watchdog stop failed: {}", exc)
 
     async def _voice_ready_watchdog(self, deadline_s: float = 45.0) -> None:
         """Release boot waiters after a failed warm-up without promising speech.
@@ -2214,10 +2248,13 @@ class WebServer:
             if full_path.startswith("api/") or full_path.startswith("ws"):
                 return JSONResponse({"detail": "Not Found"}, status_code=404)
             try:
-                target = (DIST_DIR / full_path).resolve()
-                dist_root = DIST_DIR.resolve()
-                if target.is_file() and dist_root in target.parents:
-                    return FileResponse(str(target))
+                # Resolve before checking containment so symlinks and traversal
+                # cannot escape the built frontend directory.
+                dist_root = os.path.realpath(os.fspath(DIST_DIR))
+                target = os.path.realpath(os.path.join(dist_root, full_path))
+                prefix = dist_root if dist_root.endswith(os.sep) else dist_root + os.sep
+                if target.startswith(prefix) and os.path.isfile(target):
+                    return FileResponse(target)
             except (OSError, ValueError):
                 pass
             # A missing asset (image/script/font) gets an honest 404, never the
@@ -2625,6 +2662,8 @@ class WebServer:
             self._serve_task = None
 
         _boot_mark("uvicorn_serve")
+
+        self._start_loop_watchdog(asyncio.get_running_loop())
 
         # Voice-ready UI backstop (permanent "starting up" bug): the frontend's
         # startup banner + top-left "STARTING…" status clear ONLY on a
@@ -3791,6 +3830,7 @@ class WebServer:
         return AgentChatService(store, assistant_name=_name, bus=lambda: self.bus)
 
     async def stop(self) -> None:
+        self._stop_loop_watchdog()
         # Fence lazy creation even when no Society owner exists yet. The shared
         # brain factory and HTTP surface can still be called while shutdown awaits.
         self.app.state.society_stopping = True
@@ -3810,6 +3850,18 @@ class WebServer:
             self._browser_prepare_task.cancel()
             await asyncio.gather(self._browser_prepare_task, return_exceptions=True)
             self._browser_prepare_task = None
+
+        # A short-lived server can stop before these delayed boot helpers run.
+        # Own and drain them here instead of leaving asyncio.run()/pytest to
+        # discover them during loop teardown. Stop the deferred registry reload
+        # before its registries are closed below so shutdown cannot race a scan.
+        for attr in ("_anyio_pool_warm_task", "_deferred_reload_task"):
+            task = getattr(self, attr, None)
+            setattr(self, attr, None)
+            if task is not None and not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
         society = getattr(self.app.state, "society", None)
         society_shutdown_failure: str | None = None
         if society is not None:

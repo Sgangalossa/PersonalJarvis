@@ -155,32 +155,34 @@ Token cost per failed spawn: ~40k tokens × 4 providers ≈ $0.13.
   `tests/unit/harness/test_computer_use_loop.py` (18 tests) covers both the
   production ToolExecutor path and the test-double path.
 
-## Bug #5: Frontier model IDs hallucinated (MEDIUM, latent)
+## Bug #5: Frontier model IDs hallucinated (MEDIUM, resolved implementation)
 
-- **File**: `jarvis/brain/manager.py:130-152` (TIER_DEFAULTS_BY_PROVIDER)
-- **Symptom**: Brain calls with models like `gemini-3-flash`, `gpt-5.5`,
-  `grok-4.20`, `claude-opus-4-7-20251022` produce 404 errors at the
-  provider APIs. Status: not yet verified whether all IDs are valid.
-- **Root cause**: The `claude-opus-4-7-20251022` snapshot no longer
-  exists (fixed 2026-04-28: now the `claude-opus-4-7` stable alias).
-  The other Frontier-2026-Q2 IDs are marked verifiable in `frontier_resolver.py`,
-  but there is no automatic health check before use.
-- **Fix status**: Partial. The claude-opus-4-7 stable alias is already set.
-  Pending: `frontier_autoswitch` must run actively and populate the cache
-  before production use.
-- **Regression guard**: still outstanding — TODO: `frontier_resolver` tests
-  must validate all TIER_DEFAULTS IDs against a probe list.
+- **File**: `jarvis/brain/manager.py`, `jarvis/brain/frontier_resolver.py`, `jarvis/brain/frontier_autoswitch.py`
+- **Symptom**: Static frontier defaults could age into provider-404s when no explicit model was configured.
+- **Root cause**: The resolver/autoswitch code existed, but the real first-turn path did not invoke it; additionally an unpinned fallback provider could have its model slot overwritten by a static tier default during manager construction.
+- **Fix (2026-10-05)**:
+  1. `BrainManager.generate()` now invokes the opt-in lazy frontier refresh exactly once before the first real turn, guarded by an async lock and skipped for explicit per-turn overrides.
+  2. `BrainManager.from_tier_config()` no longer writes a static fallback model into an alternate provider unless `fallback_model` is an explicit user pin; the provider's live/current model remains authoritative otherwise.
+  3. The refresh and precedence behavior have focused regression coverage in `tests/unit/brain/test_manager_frontier_autoswitch.py` and `tests/unit/brain/test_tier_model_resolution.py`.
+- **Qualification status**: implementation is verified in the current `jarvis-lab` source and the relevant tests exist. Final remote qualification is pending the active GitHub CI run on the latest branch HEAD; do not report Bug #5 as CI-green until that run completes.
 
 ## Bug #6: pyautogui dependency missing (MEDIUM, dependent)
 
-- **File**: none specific — `jarvis/plugins/tool/type_text.py` or similar
-- **Symptom**: `type_text` returns with
-  `error="pyautogui not available: No module named 'pyautogui'. Native Windows input failed: [WinError 0] Incorrect parameter."`
-- **Root cause**: `pyautogui` is an optional dependency, not installed,
-  and the native Win32 fallback has a separate bug.
-- **Fix**: `pip install pyautogui` or add it to `requirements.txt`.
-  The native fallback is a separate issue (see issue tracker).
-- **Status**: not fixed in this audit; planned for a separate phase.
+- **File**: `jarvis/plugins/tool/type_text.py`
+- **Historical symptom**: `type_text` reported pyautogui missing on installs that
+  did not carry the desktop stack, after the native Windows SendInput path had
+  rejected its malformed INPUT struct.
+- **Current architecture**: this is no longer a base-install defect. `pyautogui`
+  and `mss` are deliberately desktop-only dependencies in
+  `pyproject.toml[project.optional-dependencies].desktop`; the base/headless
+  profile must stay free of display automation packages. Windows now uses the
+  native Unicode SendInput path first, with pyautogui only as a best-effort
+  fallback. Other platforms use the configured CU actuator and degrade
+  explicitly when a desktop input backend is absent.
+- **Status (2026-10-05)**: resolved as an intentional optional dependency.
+  Do **not** move pyautogui into base requirements merely to silence the old
+  error string. Any remaining platform-specific input backend failure should
+  be tracked as a separate bug with a concrete reproduction.
 
 ## Bug #7: STT hallucinations → phantom voice sessions (MEDIUM)
 
@@ -3802,14 +3804,15 @@ health, and a zero-error run row are never sufficient evidence by themselves.
 Never recover a silent tool turn by replaying the original request; recover
 from the retained result so a side effect can occur at most once.
 
-## BUG-053: A normal realtime barge-in ends the call when cancellation loses a response-boundary race (HIGH, LARGELY FIXED 2026-07-14 — correction 3 open)
+## BUG-053: A normal realtime barge-in ends the call when cancellation loses a response-boundary race (HIGH, FIXED 2026-10-05)
 
-> **Status update (2026-07-14, afternoon).** Corrections 1 and 2 are
-> implemented (see BUG-056 below, which is the same defect fired through the
-> scrub-cancel path): `response_cancel_not_active` is now a recoverable
-> provider event, and `interrupt()` skips the wire cancel when no response
-> lifecycle is active. Correction 3 (preserve and forward the accepted
-> barge-in audio into the next turn) remains open.
+> **Status update (2026-10-05).** All three corrections are now implemented.
+> The OpenAI adapter treats `response_cancel_not_active` as a recoverable
+> lifecycle race and avoids unnecessary wire cancellation when no response is
+> active. The desktop speech pipeline preserves the detector's pre-roll plus
+> confirmed speech and forwards that payload immediately after `barge_in`,
+> without uploading the triggering raw frame twice. The end-to-end regression
+> in `tests/unit/speech/test_realtime_mode.py` pins that ordering.
 
 **Symptom.** During a healthy desktop realtime session, the user began a
 follow-up about NotebookLM and its MCP server while the preceding answer was
@@ -12939,14 +12942,18 @@ account, Claude only) → $12.6k API-equivalent across two seats, Codex, Kimi
 and Grok Build; unpriced tokens 16.7M → agy's 1.4M (the one CLI that writes
 no model id, named as such).
 
-**Still open, deliberately.** GLM panes run the Claude binary against z.ai
-with no config dir of their own and are counted as Claude Code at Anthropic
-rates (12× too high) — a spawn-side fix (own `CLAUDE_CONFIG_DIR`), T3. A
-chat turn or mission worker that drives a vendor CLI is counted once by its
-surface and once by the index; latent while the chat store holds one turn,
-needs the vendor session id persisted on both sides. Per-account
-attribution ("which seat burned this") needs an account column. An
-index-state endpoint ("63 % of 12.7 GB read") does not exist yet.
+**Resolved for GLM/chat/account/mission attribution.** GLM panes now use
+a dedicated Claude config root under the active Jarvis data dir, the usage index
+has a distinct `glm-cli` reader identity, and Z.ai model rates are separate
+from Anthropic. Subscription agent-chat rows carry the vendor session id and
+are suppressed once the CLI index has caught up. Mission worker receipts now
+join their `WorkerSpawned.session_id` / `WorkerDraftReady.session_id` to the
+same subscription CLI session and are suppressed only when the CLI index
+demonstrably covers the same usage, so partial indexing never erases a durable
+mission receipt. CLI transcript rows persist and expose the owning account id,
+including built-in defaults and `glm:default`, with schema migration and
+re-index-on-owner-change. The Costs summary exposes CLI index state through
+`IndexStatus`. No known cost-attribution gap remains in this register.
 
 **Lesson.** A spend report has as many readers as the app has ways to spend,
 and every reader is a place to be wrong in its own way. The audit that found

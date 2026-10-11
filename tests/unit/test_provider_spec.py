@@ -6,6 +6,8 @@ POST /api/secrets/{key} falls into the whitelist hole.
 """
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
 from jarvis.setup.wizard import SECRETS
 from jarvis.ui.web.provider_spec import (
     PROVIDERS,
@@ -212,23 +214,33 @@ def test_gemini_offers_both_aistudio_and_vertex() -> None:
         assert spec is not None, pid
         # Primary path is the AI-Studio API key.
         assert spec.auth_mode == "api_key"
-        assert spec.dashboard_url and "aistudio.google.com" in spec.dashboard_url
+        assert spec.dashboard_url and urlsplit(spec.dashboard_url).hostname == "aistudio.google.com"
         # The Vertex path is offered as an explicit alternative.
         assert spec.alt_credential is not None, f"{pid}: missing Vertex alt path"
         alt = spec.alt_credential
         assert "vertex" in alt.label.lower()
         assert alt.billing == "api"
         assert alt.credential_help
-        assert alt.dashboard_url and "cloud.google.com" in alt.dashboard_url
+        assert alt.dashboard_url and urlsplit(alt.dashboard_url).hostname == "console.cloud.google.com"
 
 
-def test_non_gemini_providers_have_no_alt_credential() -> None:
-    """Only the Gemini family carries the AI-Studio-vs-Vertex split today (the
-    brain, the Flash-TTS voice, and the Gemini Live realtime provider all bill
-    the same Google account); every other provider keeps a single credential
-    path (alt_credential is None)."""
+def test_only_google_provider_families_have_alt_credentials() -> None:
+    """Only Google provider cards expose alternate credential paths.
+
+    Gemini-family cards offer AI Studio vs Vertex, while the dedicated Vertex
+    card offers an express key vs a normal Google Cloud project/ADC path.
+    Every non-Google provider keeps one credential path.
+    """
     for spec in PROVIDERS:
-        if spec.id in ("gemini", "gemini-flash-tts", "gemini-live"):
+        if spec.id in {
+            "gemini",
+            "vertex",
+            "gemini-flash-tts",
+            "vertex-tts",
+            "gemini-api",
+            "vertex-stt",
+            "vertex-live",
+        }:
             continue
         assert spec.alt_credential is None, f"{spec.id}: unexpected alt_credential"
 

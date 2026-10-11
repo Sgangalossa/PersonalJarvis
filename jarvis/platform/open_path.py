@@ -37,14 +37,19 @@ def open_file(path: Path) -> bool:
         if plat == "win32":
             os.startfile(str(path))  # type: ignore[attr-defined]  # noqa: S606
             return True
-        path_str = path.as_posix()
+        # Normalize to an absolute path before passing it to a desktop opener.
+        # This prevents a relative filename beginning with '-' from being parsed
+        # as an option by open/xdg-open. No shell is involved.
+        path_str = Path(os.path.abspath(os.fspath(path))).as_posix()
         cmd = ["open", path_str] if plat == "darwin" else ["xdg-open", path_str]
-        subprocess.Popen(  # noqa: S603
-            cmd, creationflags=NO_WINDOW_CREATIONFLAGS, close_fds=True
+        # The opener is selected from this module's fixed allowlist and the file
+        # is a separate absolute argv item; no shell or option parsing is involved.
+        subprocess.Popen(  # noqa: S603  # lgtm[py/command-line-injection]
+            cmd, shell=False, creationflags=NO_WINDOW_CREATIONFLAGS, close_fds=True
         )
         return True
     except OSError as exc:
-        log.warning("open_file failed for %s: %s", path, exc)
+        log.warning("open_file failed (%s)", type(exc).__name__)
         return False
 
 
@@ -68,21 +73,27 @@ def reveal_in_folder(path: Path) -> bool:
                 close_fds=True,
             )
             return True
+        # Normalize paths before passing them to open/xdg-open so relative names
+        # beginning with '-' cannot be interpreted as command-line options.
+        path_str = Path(os.path.abspath(os.fspath(path))).as_posix()
         if plat == "darwin":
             subprocess.Popen(  # noqa: S603
-                ["open", "-R", path.as_posix()],
+                ["open", "-R", path_str],
+                shell=False,
                 creationflags=NO_WINDOW_CREATIONFLAGS,
                 close_fds=True,
             )
             return True
+        parent_str = Path(path_str).parent.as_posix()
         subprocess.Popen(  # noqa: S603
-            ["xdg-open", path.parent.as_posix()],
+            ["xdg-open", parent_str],
+            shell=False,
             creationflags=NO_WINDOW_CREATIONFLAGS,
             close_fds=True,
         )
         return True
     except OSError as exc:
-        log.warning("reveal_in_folder failed for %s: %s", path, exc)
+        log.warning("reveal_in_folder failed (%s)", type(exc).__name__)
         return False
 
 
@@ -96,9 +107,10 @@ def open_file_with(file: Path, launch_kind: str, launch_value: str) -> bool:
     always passed as the launch argument.
 
     Unlike ``os.startfile(bare_name)`` — a silent ShellExecute no-op from the
-    pythonw background process — every branch starts a real ``subprocess`` so a
-    window actually appears. Returns False on a headless host, an unknown kind,
-    or a launch error. Never raises (mirrors :func:`open_file`).
+    pythonw background process — launch targets are resolved before dispatch.
+    Windows shortcuts use ShellExecute with an explicit file argument, without
+    invoking ``cmd.exe``. Returns False on a headless host, unknown kind or launch
+    error. Never raises (mirrors :func:`open_file`).
     """
     if not detect_capabilities().display_present:
         log.info("open_file_with: no display present — skipping %s", file)
@@ -130,26 +142,21 @@ def open_file_with(file: Path, launch_kind: str, launch_value: str) -> bool:
             )
             return True
         if launch_kind == "startfile":
-            # Windows .lnk/app launched with the file as an argument via `start`.
-            # cmd.exe re-parses its own command line, and list2cmdline only
-            # quotes arguments that contain spaces, so a file named
-            # "a&calc.md" would have run a second command. Both paths are
-            # double-quoted by hand (a Windows path cannot contain '"'; one
-            # that does is refused) and the string reaches CreateProcess as is.
+            # ShellExecute opens a resolved Windows shortcut/app directly and
+            # passes the file path as parameters. Avoid cmd.exe entirely: it
+            # reparses metacharacters and environment expansions.
             file_str = str(file)
             if '"' in launch_value or '"' in file_str:
                 log.warning("open_file_with: refusing a path containing a quote: %r", file_str)
                 return False
-            subprocess.Popen(  # noqa: S603
-                f'cmd /c start "" "{launch_value}" "{file_str}"',
-                creationflags=NO_WINDOW_CREATIONFLAGS,
-                close_fds=True,
+            os.startfile(  # type: ignore[attr-defined]  # noqa: S606
+                launch_value, "open", arguments=f'"{file_str}"'
             )
             return True
         log.warning("open_file_with: unknown launch_kind %r", launch_kind)
         return False
     except OSError as exc:
-        log.warning("open_file_with failed for %s (%s): %s", file, launch_value, exc)
+        log.warning("open_file_with failed (%s)", type(exc).__name__)
         return False
 
 
@@ -280,13 +287,12 @@ def _open_url_windows(url: str) -> bool:
             subprocess.Popen(  # noqa: S603
                 [exe, url], creationflags=NO_WINDOW_CREATIONFLAGS, close_fds=True
             )
-            # Log only scheme://host at INFO — the full URL carries the OAuth
-            # ``state`` (a CSRF token) and ephemeral redirect_uri; keep it at DEBUG.
+            # URLs may contain OAuth state, redirect URIs, or other secrets.
+            # Log only the scheme/host, never the full URL.
             log.info("open_url: launched %s -> %s", exe, host)
-            log.debug("open_url: full URL %s", url)
             return True
         except OSError as exc:
-            log.warning("open_url: %s failed (%s); trying next candidate", exe, exc)
+            log.warning("open_url: browser launch failed (%s); trying next candidate", type(exc).__name__)
             continue
     # Last resort: hand the URL to the OS association. It may be a UWP handler with
     # no classic exe — but it is also the path that silently opens nothing for a
@@ -299,7 +305,7 @@ def _open_url_windows(url: str) -> bool:
         )
         return True  # best-effort; ShellExecute may open nothing for a dead handler
     except OSError as exc:
-        log.warning("open_url: ShellExecute fallback failed for %s: %s", host, exc)
+        log.warning("open_url: ShellExecute fallback failed for %s (%s)", host, type(exc).__name__)
         return False
 
 
@@ -345,7 +351,7 @@ def _run_opener_checked(argv: list[str]) -> bool:
             capture_output=True,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        log.warning("open_url: opener %r failed: %s", argv[0], exc)
+        log.warning("open_url: opener %r failed (%s)", argv[0], type(exc).__name__)
         return False
     return proc.returncode == 0
 
@@ -358,7 +364,6 @@ def _open_url_macos(url: str) -> bool:
     host = urlparse(url).netloc
     if _run_opener_checked(["open", url]):
         log.info("open_url: macOS launched default browser -> %s", host)
-        log.debug("open_url: full URL %s", url)
         return True
     for app in _MACOS_BROWSER_APPS:
         if _run_opener_checked(["open", "-a", app, url]):
@@ -378,7 +383,6 @@ def _open_url_linux(url: str) -> bool:
     host = urlparse(url).netloc
     if _run_opener_checked(["xdg-open", url]):
         log.info("open_url: Linux launched default browser -> %s", host)
-        log.debug("open_url: full URL %s", url)
         return True
     for binname in _LINUX_BROWSER_BINS:
         exe = shutil.which(binname)
@@ -391,7 +395,7 @@ def _open_url_linux(url: str) -> bool:
             log.info("open_url: Linux opened via %s -> %s", binname, host)
             return True
         except OSError as exc:
-            log.warning("open_url: %s failed (%s); trying next", binname, exc)
+            log.warning("open_url: browser %s failed (%s); trying next", binname, type(exc).__name__)
             continue
     log.warning("open_url: Linux found no browser to open %s", host)
     return False

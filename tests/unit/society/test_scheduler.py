@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from pathlib import Path
 
 import pytest
 
-from jarvis.society.events import MsgType, SocietyEnvelope, Tier
+from jarvis.society.delivery import DeliveryBusy
+from jarvis.society.events import MsgType, RoomState, SocietyEnvelope, Tier
 from jarvis.society.failure_reasons import FailureReason
+from jarvis.society.rooms import Rooms
 from jarvis.society.roster import AgentRecord, Roster
 from jarvis.society.scheduler import SocietyScheduler, validate_result
 from jarvis.society.store import SocietyStore
@@ -33,6 +37,20 @@ class FakeDeliverer:
 
     async def __call__(self, target: AgentRecord, env: SocietyEnvelope) -> None:
         self.delivered.append((target.agent_id, env.msg_type))
+
+
+class BusyDeliverer(FakeDeliverer):
+    async def __call__(self, target: AgentRecord, env: SocietyEnvelope) -> None:
+        raise DeliveryBusy("canonical chat is busy")
+
+
+class FakeRoomTurn:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str]] = []
+
+    async def __call__(self, target, room, claim_id: str) -> str:
+        self.calls.append((target.agent_id, room.room_id, claim_id))
+        return f"room:{room.room_id}:turn-1"
 
 
 class FakeBudget:
@@ -91,6 +109,423 @@ async def test_lead_assign_dispatches_and_claims(world):
     types = [e.msg_type for e in await store.events_for_trace("t1")]
     assert types == [MsgType.ASSIGN, MsgType.CLAIM]
     assert scheduler.running == {"run-1": "scout"}
+
+
+async def test_restart_recovers_unfinished_claim_run_slot(tmp_path: Path):
+    path = tmp_path / "run-recovery.db"
+    store = SocietyStore(path)
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Jarvis", tier=Tier.LEAD)
+    await roster.create(name="Scout")
+    first = SocietyScheduler(
+        store, roster, dispatch=FakeDispatcher(), budget_tracker=FakeBudget()
+    ).attach()
+    try:
+        await store.append_and_publish(_assign("jarvis", "scout", trace="recover"))
+        assert first.running == {"run-1": "scout"}
+    finally:
+        first.detach()
+
+    second_dispatcher = FakeDispatcher()
+    second = SocietyScheduler(
+        store, roster, dispatch=second_dispatcher, budget_tracker=FakeBudget()
+    ).attach()
+    try:
+        await second.recover_run_slots()
+        assert second.running == {"run-1": "scout"}
+        await store.append_and_publish(_assign("jarvis", "scout", trace="recover-2"))
+        assert second_dispatcher.calls == []
+        assert await _vetoes(store, "recover-2") == [str(FailureReason.CONCURRENCY_CAP)]
+    finally:
+        second.detach()
+        await store.close()
+
+
+async def test_restart_recovery_replays_live_result_ownership_rules(tmp_path: Path):
+    store = SocietyStore(tmp_path / "run-owner-recovery.db")
+    await store.open()
+    try:
+        for run_id, owner in (
+            ("run-scout-old", "scout"),
+            ("run-scout-new", "scout"),
+            ("run-archivist", "archivist"),
+        ):
+            await store.import_event(
+                SocietyEnvelope(
+                    msg_type=MsgType.CLAIM,
+                    from_agent=owner,
+                    to_agent="jarvis",
+                    trace_id=f"trace-{run_id}",
+                    payload={"run_id": run_id},
+                )
+            )
+        # A terminal RESULT without a usable run id releases the sender's
+        # oldest owned slot in the live scheduler.
+        await store.import_event(
+            SocietyEnvelope(
+                msg_type=MsgType.RESULT,
+                from_agent="scout",
+                to_agent="jarvis",
+                trace_id="trace-no-run",
+                payload={"done": "finished", "output": ["report"]},
+            )
+        )
+        # A stale/forged RESULT naming another agent's run must not release it.
+        await store.import_event(
+            SocietyEnvelope(
+                msg_type=MsgType.RESULT,
+                from_agent="scout",
+                to_agent="jarvis",
+                trace_id="trace-foreign-run",
+                payload={
+                    "run_id": "run-archivist",
+                    "done": "not my run",
+                    "output": ["report"],
+                },
+            )
+        )
+
+        recovered = SocietyScheduler(store, Roster(store))
+        await recovered.recover_run_slots()
+
+        assert recovered.running == {
+            "run-scout-new": "scout",
+            "run-archivist": "archivist",
+        }
+    finally:
+        await store.close()
+
+
+async def test_room_open_is_driven_by_the_same_scheduler(tmp_path: Path):
+    store = SocietyStore(tmp_path / "rooms.db")
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Jarvis", tier=Tier.LEAD)
+    await roster.create(name="Scout")
+    await roster.create(name="Archivist")
+    rooms = Rooms(store)
+    room_turn = FakeRoomTurn()
+    scheduler = SocietyScheduler(
+        store,
+        roster,
+        rooms=rooms,
+        room_turn=room_turn,
+        budget_tracker=FakeBudget(),
+    ).attach()
+    try:
+        opened = await rooms.open(opened_by="jarvis", members=["scout", "archivist"], live=True)
+        loaded = await rooms.get(opened.room_id)
+        assert loaded is not None
+        assert loaded.inflight_member == "scout"
+        assert loaded.inflight_claim_id
+        assert room_turn.calls == [("scout", opened.room_id, loaded.inflight_claim_id)]
+        assert scheduler.running == {f"room:{opened.room_id}:turn-1": "scout"}
+    finally:
+        scheduler.detach()
+        await store.close()
+
+
+async def test_room_recovery_reuses_persisted_claim_after_scheduler_restart(tmp_path: Path):
+    """A persisted in-flight claim is resumed, not replaced, after restart."""
+    path = tmp_path / "room-recovery.db"
+    store = SocietyStore(path)
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Jarvis", tier=Tier.LEAD)
+    await roster.create(name="Scout")
+    await roster.create(name="Archivist")
+    rooms = Rooms(store)
+    opened = await rooms.open(
+        opened_by="jarvis", members=["scout", "archivist"], live=True
+    )
+    async def initial_room_turn(target, room, claim_id):
+        return f"initial:{room.room_id}"
+
+    initial_scheduler = SocietyScheduler(
+        store,
+        roster,
+        rooms=rooms,
+        room_turn=initial_room_turn,
+        budget_tracker=FakeBudget(),
+    ).attach()
+    try:
+        await initial_scheduler.drive_room(opened.room_id)
+    finally:
+        initial_scheduler.detach()
+
+    loaded = await rooms.get(opened.room_id)
+    assert loaded is not None
+    persisted_claim = loaded.inflight_claim_id
+    assert persisted_claim
+    await store.close()
+
+    reopened = SocietyStore(path)
+    await reopened.open()
+    recovered_rooms = Rooms(reopened)
+    calls: list[str] = []
+
+    async def recover_room_turn(target, room, claim_id):
+        calls.append(claim_id)
+        return f"recovered:{room.room_id}"
+
+    scheduler = SocietyScheduler(
+        reopened,
+        Roster(reopened),
+        rooms=recovered_rooms,
+        room_turn=recover_room_turn,
+        budget_tracker=FakeBudget(),
+    ).attach()
+    try:
+        await scheduler.drive_room(opened.room_id)
+        assert calls == [persisted_claim]
+        assert scheduler.running == {
+            f"recovered:{opened.room_id}": "scout"
+        }
+        recovered = await recovered_rooms.get(opened.room_id)
+        assert recovered is not None
+        assert recovered.inflight_claim_id == persisted_claim
+    finally:
+        scheduler.detach()
+        await reopened.close()
+
+
+async def test_room_rejects_unusable_dispatch_run_id(tmp_path: Path):
+    store = SocietyStore(tmp_path / "room-bad-run.db")
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Jarvis", tier=Tier.LEAD)
+    await roster.create(name="Scout")
+    await roster.create(name="Archivist")
+    rooms = Rooms(store)
+    calls = []
+
+    async def broken_room_turn(target, room, claim_id):
+        calls.append((target.agent_id, room.room_id, claim_id))
+        return "   "
+
+    scheduler = SocietyScheduler(
+        store,
+        roster,
+        rooms=rooms,
+        room_turn=broken_room_turn,
+        budget_tracker=FakeBudget(),
+    ).attach()
+    try:
+        opened = await rooms.open(opened_by="jarvis", members=["scout", "archivist"], live=True)
+        loaded = await rooms.get(opened.room_id)
+        assert calls and loaded is not None
+        assert loaded.state is RoomState.FAILED
+        assert loaded.settle_reason == str(FailureReason.INTERNAL_ERROR)
+        assert loaded.inflight_claim_id == ""
+        assert scheduler.running == {}
+    finally:
+        scheduler.detach()
+        await store.close()
+
+
+async def test_concurrent_rooms_respect_target_run_cap(tmp_path: Path):
+    store = SocietyStore(tmp_path / "rooms-concurrent.db")
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Jarvis", tier=Tier.LEAD)
+    scout, _ = await roster.create(name="Scout")
+    await roster.create(name="Archivist")
+    await roster.update(scout.agent_id, {"max_concurrent_runs": 1})
+    rooms = Rooms(store)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls: list[str] = []
+
+    async def slow_room_turn(target, room, claim_id):
+        calls.append(room.room_id)
+        started.set()
+        await release.wait()
+        return f"run-{len(calls)}"
+
+    first = await rooms.open(opened_by="jarvis", members=["scout", "archivist"], live=True)
+    second = await rooms.open(opened_by="jarvis", members=["scout", "archivist"], live=True)
+    scheduler = SocietyScheduler(
+        store, roster, rooms=rooms, room_turn=slow_room_turn, budget_tracker=FakeBudget()
+    ).attach()
+    try:
+        first_task = asyncio.create_task(scheduler.drive_room(first.room_id))
+        await started.wait()
+        second_task = asyncio.create_task(scheduler.drive_room(second.room_id))
+        await asyncio.sleep(0)
+        assert not second_task.done()
+        release.set()
+        await asyncio.gather(first_task, second_task)
+
+        assert calls == [first.room_id]
+        assert scheduler.running == {"run-1": "scout"}
+        second_loaded = await rooms.get(second.room_id)
+        assert second_loaded is not None
+        assert second_loaded.state is RoomState.RUNNING
+        assert second_loaded.inflight_claim_id == ""
+    finally:
+        scheduler.detach()
+        await store.close()
+
+async def test_room_rechecks_paused_target_after_dispatch_wait(tmp_path: Path):
+    store = SocietyStore(tmp_path / "rooms-paused.db")
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Jarvis", tier=Tier.LEAD)
+    scout, _ = await roster.create(name="Scout")
+    await roster.create(name="Archivist")
+    await roster.update(scout.agent_id, {"max_concurrent_runs": 1})
+    rooms = Rooms(store)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls: list[str] = []
+
+    async def slow_room_turn(target, room, claim_id):
+        calls.append(room.room_id)
+        started.set()
+        await release.wait()
+        return f"run-{len(calls)}"
+
+    first = await rooms.open(opened_by="jarvis", members=["scout", "archivist"], live=True)
+    second = await rooms.open(opened_by="jarvis", members=["scout", "archivist"], live=True)
+    scheduler = SocietyScheduler(
+        store, roster, rooms=rooms, room_turn=slow_room_turn, budget_tracker=FakeBudget()
+    ).attach()
+    try:
+        first_task = asyncio.create_task(scheduler.drive_room(first.room_id))
+        await started.wait()
+        second_task = asyncio.create_task(scheduler.drive_room(second.room_id))
+        await asyncio.sleep(0)
+        await roster.update(scout.agent_id, {"state": "paused"})
+        release.set()
+        await asyncio.gather(first_task, second_task)
+
+        assert calls == [first.room_id]
+        second_loaded = await rooms.get(second.room_id)
+        assert second_loaded is not None
+        assert second_loaded.state is RoomState.FAILED
+        assert second_loaded.settle_reason == str(FailureReason.TARGET_PAUSED)
+    finally:
+        scheduler.detach()
+        await store.close()
+
+async def test_assign_waiting_on_agent_lock_is_blocked_by_kill_switch(world):
+    store, _, scheduler, _, _ = world
+    started = asyncio.Event()
+    release = asyncio.Event()
+    dispatched: list[str] = []
+
+    async def slow_dispatch(target, env):
+        dispatched.append(env.trace_id)
+        started.set()
+        await release.wait()
+        return f"run-{len(dispatched)}"
+
+    scheduler._dispatch = slow_dispatch
+    first = _assign("jarvis", "scout", trace="kill-race-a")
+    second = _assign("jarvis", "scout", trace="kill-race-b")
+    first_task = asyncio.create_task(scheduler._on_assign(first))
+    await started.wait()
+    second_task = asyncio.create_task(scheduler._on_assign(second))
+    await asyncio.sleep(0)
+    await store.set_kill_switch(True)
+    release.set()
+    await asyncio.gather(first_task, second_task)
+
+    assert dispatched == ["kill-race-a"]
+    assert scheduler.running == {"run-1": "scout"}
+    assert await _vetoes(store, "kill-race-b") == [str(FailureReason.KILL_SWITCH)]
+
+
+async def test_room_waiting_on_agent_lock_is_blocked_by_kill_switch(tmp_path: Path):
+    store = SocietyStore(tmp_path / "rooms-kill-race.db")
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Jarvis", tier=Tier.LEAD)
+    scout, _ = await roster.create(name="Scout")
+    await roster.create(name="Archivist")
+    rooms = Rooms(store)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls: list[str] = []
+
+    async def slow_room_turn(target, room, claim_id):
+        calls.append(room.room_id)
+        started.set()
+        await release.wait()
+        return f"run-{len(calls)}"
+
+    first = await rooms.open(opened_by="jarvis", members=["scout", "archivist"], live=True)
+    second = await rooms.open(opened_by="jarvis", members=["scout", "archivist"], live=True)
+    scheduler = SocietyScheduler(store, roster, rooms=rooms, room_turn=slow_room_turn).attach()
+    try:
+        await roster.update(scout.agent_id, {"max_concurrent_runs": 2})
+        first_task = asyncio.create_task(scheduler.drive_room(first.room_id))
+        await started.wait()
+        second_task = asyncio.create_task(scheduler.drive_room(second.room_id))
+        await asyncio.sleep(0)
+        await store.set_kill_switch(True)
+        release.set()
+        await asyncio.gather(first_task, second_task)
+
+        assert calls == [first.room_id]
+        second_loaded = await rooms.get(second.room_id)
+        assert second_loaded is not None
+        assert second_loaded.state is RoomState.SETTLED
+        assert second_loaded.settle_reason == "kill_switch"
+    finally:
+        scheduler.detach()
+        await store.close()
+
+async def test_room_open_honors_kill_switch(tmp_path: Path):
+    store = SocietyStore(tmp_path / "room-kill.db")
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Jarvis", tier=Tier.LEAD)
+    await roster.create(name="Scout")
+    await roster.create(name="Archivist")
+    rooms = Rooms(store)
+    room_turn = FakeRoomTurn()
+    scheduler = SocietyScheduler(store, roster, rooms=rooms, room_turn=room_turn).attach()
+    try:
+        await store.set_kill_switch(True)
+        opened = await rooms.open(opened_by="jarvis", members=["scout", "archivist"], live=True)
+        loaded = await rooms.get(opened.room_id)
+        assert loaded is not None
+        assert loaded.state is RoomState.SETTLED
+        assert loaded.settle_reason == "kill_switch"
+        assert room_turn.calls == []
+    finally:
+        scheduler.detach()
+        await store.close()
+
+
+async def test_room_open_honors_global_budget(tmp_path: Path):
+    store = SocietyStore(tmp_path / "room-budget.db")
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Jarvis", tier=Tier.LEAD)
+    await roster.create(name="Scout")
+    await roster.create(name="Archivist")
+    rooms = Rooms(store)
+    room_turn = FakeRoomTurn()
+    scheduler = SocietyScheduler(
+        store,
+        roster,
+        rooms=rooms,
+        room_turn=room_turn,
+        budget_tracker=FakeBudget(exceeded=True),
+    ).attach()
+    try:
+        opened = await rooms.open(opened_by="jarvis", members=["scout", "archivist"], live=True)
+        loaded = await rooms.get(opened.room_id)
+        assert loaded is not None
+        assert loaded.state is RoomState.FAILED
+        assert loaded.settle_reason == str(FailureReason.BUDGET_EXHAUSTED)
+        assert room_turn.calls == []
+    finally:
+        scheduler.detach()
+        await store.close()
 
 
 async def test_specialist_cannot_assign(world):
@@ -162,6 +597,31 @@ async def test_global_budget_vetoes(tmp_path: Path):
     assert await _vetoes(store, "t1") == [str(FailureReason.BUDGET_EXHAUSTED)]
     await store.close()
 
+async def test_budget_tracker_getter_is_resolved_for_each_assignment(tmp_path: Path):
+    store = SocietyStore(tmp_path / "budget-getter.db")
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Jarvis", tier=Tier.LEAD)
+    await roster.create(name="Scout")
+    dispatcher = FakeDispatcher()
+    current_budget = None
+
+    def get_budget():
+        return current_budget
+
+    SocietyScheduler(
+        store, roster, dispatch=dispatcher, budget_tracker_getter=get_budget
+    ).attach()
+    await store.append_and_publish(_assign("jarvis", "scout", trace="first"))
+    assert len(dispatcher.calls) == 1
+
+    current_budget = FakeBudget(exceeded=True)
+    await store.append_and_publish(_assign("jarvis", "scout", trace="second"))
+
+    assert len(dispatcher.calls) == 1
+    assert await _vetoes(store, "second") == [str(FailureReason.BUDGET_EXHAUSTED)]
+    await store.close()
+
 
 async def test_agent_daily_budget_vetoes(world):
     store, roster, _, dispatcher, _ = world
@@ -205,6 +665,104 @@ async def test_concurrency_cap_and_result_release(world):
     assert [c[1] for c in dispatcher.calls] == ["a", "c"]
 
 
+async def test_result_cannot_release_a_foreign_run_slot(world, caplog):
+    store, roster, scheduler, dispatcher, _ = world
+    await store.append_and_publish(_assign("jarvis", "scout", trace="scout-run"))
+    await store.append_and_publish(_assign("jarvis", "archivist", trace="archivist-run"))
+
+    assert scheduler.running == {"run-1": "scout", "run-2": "archivist"}
+
+    forged = SocietyEnvelope(
+        msg_type=MsgType.RESULT,
+        from_agent="scout",
+        to_agent="jarvis",
+        trace_id="foreign-result",
+        payload={
+            "run_id": "run-2",
+            "done": "stolen completion",
+            "output": ["a"],
+        },
+    )
+    with caplog.at_level("WARNING", logger="jarvis.society.scheduler"):
+        await store.append_and_publish(forged)
+
+    assert scheduler.running == {"run-1": "scout", "run-2": "archivist"}
+    assert "referenced run run-2 owned by archivist" in caplog.text
+
+
+async def test_concurrent_assignments_respect_target_run_cap(world):
+    store, roster, scheduler, _, _ = world
+    await roster.update("scout", {"max_concurrent_runs": 1})
+    started = asyncio.Event()
+    release = asyncio.Event()
+    dispatched: list[str] = []
+
+    async def slow_dispatch(target, env):
+        dispatched.append(env.trace_id)
+        started.set()
+        await release.wait()
+        return "run-1"
+
+    scheduler._dispatch = slow_dispatch
+    first = _assign("jarvis", "scout", trace="race-a")
+    second = _assign("jarvis", "scout", trace="race-b")
+    first_task = asyncio.create_task(scheduler._on_assign(first))
+    await started.wait()
+    second_task = asyncio.create_task(scheduler._on_assign(second))
+    await asyncio.sleep(0)
+    assert not second_task.done()
+    release.set()
+    await asyncio.gather(first_task, second_task)
+
+    assert dispatched == ["race-a"]
+    assert scheduler.running == {"run-1": "scout"}
+    assert await _vetoes(store, "race-b") == [str(FailureReason.CONCURRENCY_CAP)]
+
+async def test_concurrent_assignments_respect_trace_message_cap(world, monkeypatch):
+    store, _, scheduler, _, _ = world
+    scheduler._trace_cap = 2
+    started = asyncio.Event()
+    release = asyncio.Event()
+    dispatched: list[str] = []
+    waiting = asyncio.Event()
+    trace_lock = scheduler._trace_lock
+    lock_requests = 0
+
+    def observed_trace_lock(trace_id):
+        nonlocal lock_requests
+        lock_requests += 1
+        if lock_requests == 2:
+            waiting.set()
+        return trace_lock(trace_id)
+
+    monkeypatch.setattr(scheduler, "_trace_lock", observed_trace_lock)
+
+    async def slow_dispatch(target, env):
+        dispatched.append(env.trace_id)
+        started.set()
+        await release.wait()
+        return "run-1"
+
+    scheduler._dispatch = slow_dispatch
+    first = _assign("jarvis", "scout", trace="same-trace")
+    second = _assign("jarvis", "archivist", trace="same-trace")
+    # Real scheduler inputs are durable before dispatch. Both ASSIGN rows
+    # fit the cap; the first CLAIM must push the waiting assignment over it.
+    await store.import_event(first)
+    first_task = asyncio.create_task(scheduler._on_assign(first))
+    await started.wait()
+    await store.import_event(second)
+    assert await store.count_in_trace("same-trace") == 2
+    second_task = asyncio.create_task(scheduler._on_assign(second))
+    await asyncio.wait_for(waiting.wait(), timeout=2)
+    assert not second_task.done()
+    release.set()
+    await asyncio.gather(first_task, second_task)
+
+    assert dispatched == ["same-trace"]
+    assert scheduler.running == {"run-1": "scout"}
+    assert await _vetoes(store, "same-trace") == [str(FailureReason.MESSAGE_CAP)]
+
 async def test_invalid_result_is_vetoed(world):
     store, _, _, _, _ = world
     await store.append_and_publish(
@@ -219,6 +777,48 @@ def test_validate_result_rules():
     assert validate_result({"done": "", "output": ["a"]}) is not None
     assert validate_result({"done": "x"}) is not None
     assert validate_result({"done": "x", "output": ["a"], "status": "weird"}) is not None
+
+
+async def test_invalid_result_releases_its_owned_run_slot(world):
+    store, _, scheduler, dispatcher, _ = world
+    await store.append_and_publish(_assign("jarvis", "scout", trace="invalid"))
+
+    assert scheduler.running == {"run-1": "scout"}
+
+    await store.append_and_publish(
+        SocietyEnvelope(
+            msg_type=MsgType.RESULT,
+            from_agent="scout",
+            to_agent="jarvis",
+            trace_id="invalid",
+            payload={"run_id": "run-1"},
+        )
+    )
+
+    assert scheduler.running == {}
+    assert await _vetoes(store, "invalid") == [str(FailureReason.INVALID_RESULT)]
+    assert dispatcher.calls == [("scout", "invalid")]
+
+
+@pytest.mark.parametrize("run_id", ["", " ", "\t", " run-1 "])
+async def test_blank_result_run_id_releases_sender_slot(world, run_id):
+    store, _, scheduler, dispatcher, _ = world
+    await store.append_and_publish(_assign("jarvis", "scout", trace="blank-run"))
+    assert scheduler.running == {"run-1": "scout"}
+
+    await store.append_and_publish(
+        SocietyEnvelope(
+            msg_type=MsgType.RESULT,
+            from_agent="scout",
+            to_agent="jarvis",
+            trace_id="blank-run",
+            payload={"run_id": run_id, "done": "x", "output": ["a"]},
+        )
+    )
+
+    assert scheduler.running == {}
+    assert await _vetoes(store, "blank-run") == []
+    assert dispatcher.calls == [("scout", "blank-run")]
 
 
 async def test_result_with_next_owner_is_delivered(world):
@@ -249,6 +849,261 @@ async def test_say_is_delivered_and_capped(world):
     assert await _vetoes(store, "s") == [str(FailureReason.TARGET_UNKNOWN)]
 
 
+async def test_busy_delivery_stays_queued_and_is_logged(tmp_path: Path, caplog):
+    store = SocietyStore(tmp_path / "busy-delivery.db")
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Scout")
+    await roster.create(name="Archivist")
+    scheduler = SocietyScheduler(store, roster, deliver=BusyDeliverer()).attach()
+    try:
+        event = SocietyEnvelope(
+            msg_type=MsgType.SAY,
+            from_agent="scout",
+            to_agent="archivist",
+            trace_id="busy",
+        )
+        with caplog.at_level(logging.INFO, logger="jarvis.society.scheduler"):
+            await store.append_and_publish(event)
+        assert await store.delivery_status(event.event_id) == "queued"
+        assert "durable queue will retry" in caplog.text
+    finally:
+        scheduler.detach()
+        await store.close()
+
+
+async def test_concurrent_drainers_claim_handoff_once(tmp_path: Path):
+    class BlockingDeliverer(FakeDeliverer):
+        def __init__(self) -> None:
+            super().__init__()
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def __call__(self, target: AgentRecord, env: SocietyEnvelope) -> None:
+            self.delivered.append((target.agent_id, env.msg_type))
+            self.entered.set()
+            await self.release.wait()
+
+    store = SocietyStore(tmp_path / "concurrent-delivery.db")
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Scout")
+    await roster.create(name="Archivist")
+    deliverer = BlockingDeliverer()
+    first = SocietyScheduler(store, roster, deliver=deliverer)
+    second = SocietyScheduler(store, roster, deliver=deliverer)
+    result = await store.append_and_publish(_handoff("archivist", trace="claim-once"))
+    first_drain = asyncio.create_task(first.drain_deliveries())
+    await deliverer.entered.wait()
+    second_drain = asyncio.create_task(second.drain_deliveries())
+    await asyncio.sleep(0)
+    deliverer.release.set()
+    await asyncio.gather(first_drain, second_drain)
+
+    assert deliverer.delivered == [("archivist", MsgType.RESULT)]
+    assert await store.delivery_status(result.event_id) == "delivered"
+    await store.close()
+
+
+async def test_concurrent_drainers_preserve_recipient_fifo(tmp_path: Path):
+    class FirstDeliveryBlocks(FakeDeliverer):
+        def __init__(self) -> None:
+            super().__init__()
+            self.event_ids: list[str] = []
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def __call__(self, target: AgentRecord, env: SocietyEnvelope) -> None:
+            self.event_ids.append(env.event_id)
+            if len(self.event_ids) == 1:
+                self.entered.set()
+                await self.release.wait()
+            self.delivered.append((target.agent_id, env.msg_type))
+
+    store = SocietyStore(tmp_path / "concurrent-fifo.db")
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Scout")
+    await roster.create(name="Archivist")
+    deliverer = FirstDeliveryBlocks()
+    first = SocietyScheduler(store, roster, deliver=deliverer)
+    second = SocietyScheduler(store, roster, deliver=deliverer)
+    head = await store.append_and_publish(_handoff("archivist", trace="claim-fifo"))
+    tail = await store.append_and_publish(_handoff("archivist", trace="claim-fifo"))
+
+    try:
+        first_drain = asyncio.create_task(first.drain_deliveries())
+        await deliverer.entered.wait()
+        try:
+            await second.drain_deliveries()
+            assert deliverer.event_ids == [head.event_id]
+        finally:
+            deliverer.release.set()
+            await first_drain
+
+        assert deliverer.event_ids == [head.event_id, tail.event_id]
+        assert await store.delivery_status(head.event_id) == "delivered"
+        assert await store.delivery_status(tail.event_id) == "delivered"
+    finally:
+        await store.close()
+
+
+async def test_delivery_arriving_during_active_drain_is_not_stranded(tmp_path: Path):
+    class FirstDeliveryBlocks(FakeDeliverer):
+        def __init__(self) -> None:
+            super().__init__()
+            self.event_ids: list[str] = []
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def __call__(self, target: AgentRecord, env: SocietyEnvelope) -> None:
+            self.event_ids.append(env.event_id)
+            if len(self.event_ids) == 1:
+                self.entered.set()
+                await self.release.wait()
+            self.delivered.append((target.agent_id, env.msg_type))
+
+    store = SocietyStore(tmp_path / "delivery-during-drain.db")
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Scout")
+    await roster.create(name="Archivist")
+    deliverer = FirstDeliveryBlocks()
+    scheduler = SocietyScheduler(store, roster, deliver=deliverer).attach()
+    first = SocietyEnvelope(
+        msg_type=MsgType.SAY,
+        from_agent="scout",
+        to_agent="archivist",
+        trace_id="coalesced-drain",
+    )
+    second = SocietyEnvelope(
+        msg_type=MsgType.SAY,
+        from_agent="scout",
+        to_agent="archivist",
+        trace_id="coalesced-drain",
+    )
+    try:
+        first_publish = asyncio.create_task(store.append_and_publish(first))
+        await deliverer.entered.wait()
+        await store.append_and_publish(second)
+        assert await store.delivery_status(second.event_id) == "queued"
+
+        deliverer.release.set()
+        await first_publish
+
+        assert deliverer.event_ids == [first.event_id, second.event_id]
+        assert await store.delivery_status(first.event_id) == "delivered"
+        assert await store.delivery_status(second.event_id) == "delivered"
+    finally:
+        scheduler.detach()
+        await store.close()
+
+
+async def test_cancelled_delivery_releases_claim_for_retry(tmp_path: Path):
+    class CancelledDeliverer(FakeDeliverer):
+        async def __call__(self, target: AgentRecord, env: SocietyEnvelope) -> None:
+            raise asyncio.CancelledError
+
+    store = SocietyStore(tmp_path / "cancelled-delivery.db")
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Scout")
+    await roster.create(name="Archivist")
+    result = await store.append_and_publish(_handoff("archivist", trace="cancel-retry"))
+    cancelled = SocietyScheduler(store, roster, deliver=CancelledDeliverer())
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled.drain_deliveries()
+
+    deliverer = FakeDeliverer()
+    await SocietyScheduler(store, roster, deliver=deliverer).drain_deliveries()
+    assert deliverer.delivered == [("archivist", MsgType.RESULT)]
+    assert await store.delivery_status(result.event_id) == "delivered"
+    await store.close()
+
+
+async def test_restart_releases_interrupted_delivery_claim(tmp_path: Path):
+    path = tmp_path / "interrupted-claim.db"
+    store = SocietyStore(path)
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Scout")
+    await roster.create(name="Archivist")
+    result = await store.append_and_publish(_handoff("archivist", trace="restart-claim"))
+    assert await store.claim_delivery(result.event_id, "crashed-process")
+    assert [env.event_id for env in await store.pending_deliveries()] == [result.event_id]
+    await store.close()
+
+    reopened = SocietyStore(path)
+    await reopened.open()
+    deliverer = FakeDeliverer()
+    await SocietyScheduler(reopened, Roster(reopened), deliver=deliverer).drain_deliveries()
+    assert deliverer.delivered == [("archivist", MsgType.RESULT)]
+    assert await reopened.delivery_status(result.event_id) == "delivered"
+    await reopened.close()
+
+
+async def test_projected_receipt_stays_queued_until_its_turn(tmp_path: Path):
+    class BusyWithReceiptProjection:
+        def __init__(self) -> None:
+            self.received: list[str] = []
+            self.delivered: list[str] = []
+            self.busy = True
+
+        async def __call__(self, target: AgentRecord, env: SocietyEnvelope) -> None:
+            if self.busy:
+                raise DeliveryBusy("canonical chat is busy")
+            self.delivered.append(env.event_id)
+            self.busy = True
+
+        async def receive(self, target: AgentRecord, env: SocietyEnvelope) -> None:
+            self.received.append(env.event_id)
+
+    store = SocietyStore(tmp_path / "projected-receipt.db")
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Scout")
+    await roster.create(name="Archivist")
+    deliverer = BusyWithReceiptProjection()
+    scheduler = SocietyScheduler(store, roster, deliver=deliverer).attach()
+    try:
+        first = await store.append_and_publish(
+            SocietyEnvelope(
+                msg_type=MsgType.SAY,
+                from_agent="scout",
+                to_agent="archivist",
+                trace_id="busy-receipts",
+            )
+        )
+        second = await store.append_and_publish(
+            SocietyEnvelope(
+                msg_type=MsgType.SAY,
+                from_agent="scout",
+                to_agent="archivist",
+                trace_id="busy-receipts",
+            )
+        )
+
+        assert await store.delivery_status(first.event_id) == "queued"
+        assert await store.delivery_status(second.event_id) == "queued"
+        assert deliverer.received == [second.event_id]
+
+        deliverer.busy = False
+        await scheduler.drain_deliveries()
+        assert deliverer.received == [second.event_id]
+        assert deliverer.delivered == [first.event_id]
+        assert await store.delivery_status(first.event_id) == "delivered"
+        assert await store.delivery_status(second.event_id) == "queued"
+
+        deliverer.busy = False
+        await scheduler.drain_deliveries()
+        assert deliverer.received == [second.event_id]
+        assert deliverer.delivered == [first.event_id, second.event_id]
+        assert await store.delivery_status(second.event_id) == "delivered"
+    finally:
+        scheduler.detach()
+        await store.close()
+
+
 async def test_trace_message_cap(tmp_path: Path):
     store = SocietyStore(tmp_path / "c.db")
     await store.open()
@@ -266,6 +1121,21 @@ async def test_trace_message_cap(tmp_path: Path):
     assert len(deliverer.delivered) == 2
     assert FailureReason.MESSAGE_CAP in await _vetoes(store, "s")
     await store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("run_id", ["", " ", "\t"])
+async def test_unusable_dispatch_run_id_becomes_internal_veto(world, run_id):
+    store, _, scheduler, _, _ = world
+
+    async def broken_dispatch(target, env):
+        return run_id
+
+    scheduler._dispatch = broken_dispatch
+    await store.append_and_publish(_assign("jarvis", "scout", trace="bad-run"))
+
+    assert scheduler.running == {}
+    assert await _vetoes(store, "bad-run") == [str(FailureReason.INTERNAL_ERROR)]
 
 
 async def test_dispatch_failure_becomes_typed_veto(tmp_path: Path):
@@ -287,3 +1157,139 @@ async def test_no_spawn_tool_in_never_granted_is_a_dispatch_path(world):
     from jarvis.society.capabilities import NEVER_GRANTED
 
     assert {"spawn-worker", "spawn-subagents", "multi-spawn"} <= NEVER_GRANTED
+
+
+def _handoff(next_owner: str, trace: str = "h") -> SocietyEnvelope:
+    return SocietyEnvelope(
+        msg_type=MsgType.RESULT,
+        from_agent="scout",
+        to_agent="jarvis",
+        trace_id=trace,
+        payload={"done": "x", "output": ["a"], "next_owner": next_owner},
+    )
+
+
+async def test_result_handoff_is_a_durable_delivery_receipt(world):
+    store, _, _, _, deliverer = world
+    result = await store.append_and_publish(_handoff("archivist"))
+    assert deliverer.delivered == [("archivist", MsgType.RESULT)]
+    assert await store.delivery_status(result.event_id) == "delivered"
+    assert await store.pending_deliveries() == []
+
+
+async def test_result_handoff_respects_kill_switch(world):
+    store, _, _, _, deliverer = world
+    await store.set_kill_switch(True)
+    result = await store.append_and_publish(_handoff("archivist"))
+    assert deliverer.delivered == []
+    assert await store.delivery_status(result.event_id) == "failed"
+    assert await _vetoes(store, "h") == [str(FailureReason.KILL_SWITCH)]
+
+
+async def test_result_handoff_to_unknown_owner_is_vetoed(world):
+    store, _, _, _, deliverer = world
+    result = await store.append_and_publish(_handoff("nobody"))
+    assert deliverer.delivered == []
+    assert await store.delivery_status(result.event_id) == "failed"
+    assert await _vetoes(store, "h") == [str(FailureReason.TARGET_UNKNOWN)]
+
+
+@pytest.mark.parametrize("gate", ["paused", "message_cap"])
+async def test_result_handoff_obeys_recipient_and_trace_gates(world, gate):
+    store, roster, scheduler, _, deliverer = world
+    if gate == "paused":
+        await roster.update("archivist", {"state": "paused"})
+        reason = FailureReason.TARGET_PAUSED
+    else:
+        scheduler._trace_cap = 0
+        reason = FailureReason.MESSAGE_CAP
+    result = await store.append_and_publish(_handoff("archivist"))
+    assert deliverer.delivered == []
+    assert await store.delivery_status(result.event_id) == "failed"
+    assert await _vetoes(store, "h") == [str(reason)]
+
+
+async def test_busy_result_handoff_is_retried_after_reopen(tmp_path: Path):
+    path = tmp_path / "society.db"
+    store = SocietyStore(path)
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Scout")
+    await roster.create(name="Archivist")
+    busy = SocietyScheduler(store, roster, deliver=BusyDeliverer()).attach()
+    result = await store.append_and_publish(_handoff("archivist"))
+    busy.detach()
+    assert [e.event_id for e in await store.pending_deliveries()] == [result.event_id]
+    assert await _vetoes(store, "h") == []
+    await store.close()
+
+    reopened = SocietyStore(path)
+    await reopened.open()
+    deliverer = FakeDeliverer()
+    scheduler = SocietyScheduler(reopened, Roster(reopened), deliver=deliverer)
+    try:
+        await scheduler.drain_deliveries()
+        await scheduler.drain_deliveries()
+        assert deliverer.delivered == [("archivist", MsgType.RESULT)]
+        assert await reopened.delivery_status(result.event_id) == "delivered"
+    finally:
+        await reopened.close()
+
+
+@pytest.mark.parametrize("next_owner", [None, "", "  ", "\t\n", "\u2003", 123])
+async def test_result_without_next_owner_is_not_queued(world, next_owner):
+    store, _, _, _, deliverer = world
+    await store.append_and_publish(
+        SocietyEnvelope(
+            msg_type=MsgType.RESULT,
+            from_agent="scout",
+            to_agent="jarvis",
+            trace_id="n",
+            payload={"done": "x", "output": ["a"], "next_owner": next_owner},
+        )
+    )
+    assert deliverer.delivered == []
+    assert await store.pending_deliveries() == []
+
+
+@pytest.mark.parametrize("valid", [True, False])
+async def test_result_handoff_survives_interrupted_publication(world, monkeypatch, valid):
+    store, _, scheduler, _, deliverer = world
+    result = _handoff("archivist")
+    if not valid:
+        result = result.model_copy(update={"payload": {"next_owner": "archivist"}})
+
+    async def interrupted_publish(_env):
+        raise asyncio.CancelledError
+
+    with monkeypatch.context() as patch:
+        patch.setattr(store.bus, "publish", interrupted_publish)
+        with pytest.raises(asyncio.CancelledError):
+            await store.append_and_publish(result)
+    scheduler.detach()
+    await store.close()
+    await store.open()
+    assert [env.event_id for env in await store.pending_deliveries()] == [result.event_id]
+
+    recovery = SocietyScheduler(store, Roster(store), deliver=deliverer)
+    await recovery.drain_deliveries()
+    await recovery.drain_deliveries()
+    persisted = await store.get_event(result.event_id)
+    assert persisted is not None and persisted.to_agent == "jarvis"
+    if valid:
+        assert deliverer.delivered == [("archivist", MsgType.RESULT)]
+        assert await store.delivery_status(result.event_id) == "delivered"
+    else:
+        assert deliverer.delivered == []
+        assert await store.delivery_status(result.event_id) == "failed"
+        assert await _vetoes(store, "h") == [str(FailureReason.INVALID_RESULT)]
+
+
+async def test_invalid_result_handoff_is_vetoed_once(world):
+    store, _, scheduler, _, deliverer = world
+    result = _handoff("archivist").model_copy(update={"payload": {"next_owner": "archivist"}})
+    await store.append_and_publish(result)
+    await scheduler.drain_deliveries()
+    assert deliverer.delivered == []
+    assert await store.delivery_status(result.event_id) == "failed"
+    assert await _vetoes(store, "h") == [str(FailureReason.INVALID_RESULT)]

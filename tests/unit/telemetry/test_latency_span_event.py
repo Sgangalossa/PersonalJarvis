@@ -53,6 +53,7 @@ def test_latency_phase_is_a_string_enum_source_of_truth() -> None:
         "intent_decision",
         "ack_first_token",
         "ack_first_audio",
+        "ack_playback_confirmed",
         "brain_first_token",
         "brain_first_audio",
         "turn_to_first_audio",
@@ -74,6 +75,7 @@ def test_latency_phase_is_a_string_enum_source_of_truth() -> None:
         "realtime_delegate_completed",
         "realtime_tool_completed",
         "realtime_scrub_cancel",
+        "realtime_empty_turn_reask",
         "realtime_cancel",
         "realtime_turn_complete",
     }

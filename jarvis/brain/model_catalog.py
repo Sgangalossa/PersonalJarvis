@@ -610,7 +610,7 @@ REALTIME_MODELS: dict[str, list[ModelInfo]] = {
 }
 
 # Realtime voice catalogs — stable prebuilt-voice names (curated, not live).
-# openai-realtime: verified 2026-07-10 against the official Realtime
+# openai-live: verified 2026-07-10 against the official Realtime
 # conversations guide — ten current voices, including Marin and Cedar.
 # gemini-live / vertex-live: verified 2026-07-10 against the Live API
 # capabilities guide, which now permits the complete 30-voice Gemini
@@ -621,8 +621,9 @@ REALTIME_VOICES: dict[str, list[ModelInfo]] = {
     # honest entry: the adapter sends no voice override and the server uses its
     # own default.
     "local-realtime": _curated([("auto", "Your server's own voice")]),
-    "openai-realtime": _ids(
+    "openai-live": _ids(
         [
+            "marin",
             "alloy",
             "ash",
             "ballad",
@@ -631,7 +632,6 @@ REALTIME_VOICES: dict[str, list[ModelInfo]] = {
             "sage",
             "shimmer",
             "verse",
-            "marin",
             "cedar",
         ]
     ),

@@ -70,19 +70,19 @@ def _cmd_list(args: argparse.Namespace) -> int:
 
 def _cmd_buy(args: argparse.Namespace) -> int:
     sid, token = _resolve_credentials(args)
-    owned = provisioning.buy_number(
+    provisioning.buy_number(
         sid, token, phone_number=args.number, voice_webhook_url=args.url
     )
-    print(f"Bought {owned.phone_number} (sid={owned.sid}); voice webhook -> {owned.voice_url}")
+    print("Bought the requested number and configured its voice webhook.")
     return 0
 
 
 def _cmd_set_webhook(args: argparse.Namespace) -> int:
     sid, token = _resolve_credentials(args)
-    owned = provisioning.set_voice_webhook(
+    provisioning.set_voice_webhook(
         sid, token, phone_number=args.number, voice_webhook_url=args.url
     )
-    print(f"Updated {owned.phone_number}: voice webhook -> {owned.voice_url}")
+    print("Updated the requested number's voice webhook.")
     return 0
 
 
@@ -90,9 +90,10 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     sid, token = _resolve_credentials(args)
     owned = provisioning.inspect_number(sid, token, phone_number=args.number)
     if owned is None:
-        print(f"{args.number} is not owned by this account.")
+        print("The requested number is not owned by this account.")
         return 1
-    print(f"{owned.phone_number} (sid={owned.sid}); voice webhook = {owned.voice_url or '(none)'}")
+    webhook_state = "configured" if owned.voice_url else "not configured"
+    print(f"The requested number is owned; voice webhook is {webhook_state}.")
     return 0
 
 
@@ -132,7 +133,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return handlers[args.cmd](args)
     except provisioning.TelephonyProvisionError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        # Provider exceptions may contain request metadata or credential-bearing
+        # response fragments; keep the CLI output useful without echoing them.
+        print(
+            f"ERROR: telephony provisioning failed ({type(exc).__name__}). "
+            "Check the Jarvis log for details.",
+            file=sys.stderr,
+        )
         return 1
 
 

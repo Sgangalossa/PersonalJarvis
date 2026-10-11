@@ -250,6 +250,48 @@ async def test_a_typed_turn_walks_to_the_docks_and_back(rt: SocietyRuntime):
     assert [p.checkpoint for p in pushed] == ["desk", "hub:plugins", "idle"]
 
 
+async def test_turn_watcher_survives_rapid_turn_restart(rt: SocietyRuntime):
+    """A replacement turn must not inherit a stale family window."""
+    svc = FakeChatService()
+    rt._get_chat = lambda: svc
+    pushed: list = []
+    rt.checkpoints._publish = pushed.append
+    session = "society:scout"
+    svc.running.add(session)
+    rt.checkpoints.note_turn_started("scout", session)
+    for _ in range(8):
+        svc.emit(session, "tool_call", name="google_drive")
+    await _wait_for_checkpoint(rt, Checkpoint.HUB_PLUGINS, pushed)
+
+    # The runner can finish one turn and start the next before the watcher
+    # consumes the terminal event. The session is therefore still running.
+    svc.emit(session, "turn_finished", status="ok")
+    svc.emit(session, "tool_call", name="github/search_issues")
+    await _wait_for_checkpoint(rt, Checkpoint.HUB_MCP, pushed)
+
+    svc.running.discard(session)
+    svc.emit(session, "turn_finished", status="ok")
+    await _wait_for_checkpoint(rt, Checkpoint.IDLE, pushed)
+
+
+async def test_turn_watcher_subscribes_before_first_tool_event(rt: SocietyRuntime):
+    """A tool emitted in the same loop turn as startup must not be lost."""
+    svc = FakeChatService()
+    rt._get_chat = lambda: svc
+    pushed: list = []
+    rt.checkpoints._publish = pushed.append
+    session = "society:scout"
+    svc.running.add(session)
+    rt.checkpoints.note_turn_started("scout", session)
+    # note_turn_started must own the subscription before returning.
+    svc.emit(session, "tool_call", name="google_drive", input={})
+    await _wait_for_checkpoint(rt, Checkpoint.HUB_PLUGINS, pushed)
+    assert (await rt.roster.get("scout")).checkpoint is Checkpoint.HUB_PLUGINS
+    svc.running.discard(session)
+    svc.emit(session, "turn_finished", status="ok")
+    await _wait_for_checkpoint(rt, Checkpoint.IDLE, pushed)
+
+
 async def test_family_hysteresis(rt: SocietyRuntime):
     """The first family wins at once; a different one must dominate 20 s before the
     figure changes shops, and the timer makes the switch without another call."""

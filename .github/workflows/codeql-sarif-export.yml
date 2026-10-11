@@ -1,0 +1,84 @@
+name: CodeQL alert diagnostic export
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  checks: read
+  security-events: read
+
+jobs:
+  export-alerts:
+    name: Export CodeQL alerts for triage
+    if: github.event.pull_request.number == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Wait for CodeQL analyses and export alerts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p codeql-diagnostic
+          found=false
+
+          for attempt in $(seq 1 90); do
+            checks="$(gh api -H 'Accept: application/vnd.github+json' \
+              "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/check-runs?per_page=100")"
+
+            pending_analyses="$(jq '[.check_runs[]
+              | select(.name | startswith("Analyze ("))
+              | select(.status != "completed")] | length' <<< "$checks")"
+            has_python="$(jq '[.check_runs[] | select(.name == "Analyze (python)")] | length' <<< "$checks")"
+            has_javascript="$(jq '[.check_runs[] | select(.name == "Analyze (javascript-typescript)")] | length' <<< "$checks")"
+            codeql_status="$(jq -r '[.check_runs[] | select(.name == "CodeQL")]
+              | sort_by(.started_at // "") | last | .status // empty' <<< "$checks")"
+
+            # The aggregate CodeQL check can finish before language analysis. Wait
+            # for the Python and JavaScript/TypeScript analyzers, plus every analyzer
+            # currently present on this SHA, before querying the alert API.
+            if [[ "$pending_analyses" == "0" && "$has_python" -gt 0 \
+              && "$has_javascript" -gt 0 && "$codeql_status" == "completed" ]]; then
+              gh api -H 'Accept: application/vnd.github+json' \
+                "repos/${GITHUB_REPOSITORY}/code-scanning/alerts?tool_name=CodeQL&state=open&pr=${PR_NUMBER}&per_page=100" \
+                > codeql-diagnostic/alerts.json
+
+              jq '[.[] | {
+                number,
+                state,
+                html_url,
+                rule_id: .rule.id,
+                description: .rule.description,
+                security_severity_level: .rule.security_severity_level,
+                tags: .rule.tags,
+                location: .most_recent_instance.location,
+                message: .most_recent_instance.message.text,
+                ref: .most_recent_instance.ref
+              }]' codeql-diagnostic/alerts.json > codeql-diagnostic/alerts-review.json
+              printf '%s\n' "$HEAD_SHA" > codeql-diagnostic/head-sha.txt
+              printf '%s\n' "$PR_NUMBER" > codeql-diagnostic/pr-number.txt
+              found=true
+              break
+            fi
+            sleep 10
+          done
+
+          if [[ "$found" != "true" ]]; then
+            echo "CodeQL analysis did not finish for Python and JavaScript/TypeScript within 15 minutes." >&2
+            exit 1
+          fi
+          echo "Exported $(jq 'length' codeql-diagnostic/alerts.json) open CodeQL alerts for PR #${PR_NUMBER}."
+
+      - name: Upload alert data for review
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.6.2
+        with:
+          name: codeql-alerts-${{ github.run_id }}
+          path: codeql-diagnostic/
+          if-no-files-found: error
+          retention-days: 14

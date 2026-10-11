@@ -141,6 +141,19 @@ class HookInbox:
         ) as cursor:
             return [dict(row) for row in await cursor.fetchall()]
 
+    async def claim_running(self, task_id: str, delivery_id: str) -> bool:
+        """Claim a pending delivery exactly once."""
+        cur = await self._conn.execute(
+            "UPDATE task_hook_deliveries SET status='running' "
+            "WHERE task_id=? AND delivery_id=? AND status='pending' "
+            "AND NOT EXISTS (SELECT 1 FROM task_hook_deliveries "
+            "WHERE task_id=? AND status='running')",
+            (task_id, delivery_id, task_id),
+        )
+        changed = cur.rowcount == 1
+        await cur.close()
+        return changed
+
     async def mark(self, task_id: str, delivery_id: str, status: str) -> None:
         await self._conn.execute(
             "UPDATE task_hook_deliveries SET status=? WHERE task_id=? AND delivery_id=?",

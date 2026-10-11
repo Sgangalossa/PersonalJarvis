@@ -40,6 +40,31 @@ async def test_message_appends_one_typed_envelope(rt: SocietyRuntime):
     assert [(e.msg_type, e.from_agent) for e in inbox] == [(MsgType.QUERY, "scout")]
 
 
+
+async def test_answer_reciprocal_query_is_accepted(rt: SocietyRuntime):
+    tool = MessageAgentTool(rt, "scout")
+    query = await tool.execute(
+        {"target": "Archivist", "text": "What did you find?", "kind": "query"},
+        CTX,
+    )
+    assert query.success, query.error
+    request = (await rt.store.inbox_for("archivist"))[-1]
+
+    answer = await MessageAgentTool(rt, "archivist").execute(
+        {
+            "target": "Scout",
+            "text": "Nothing to report.",
+            "kind": "answer",
+            "in_reply_to": request.event_id,
+            "reply_status": "done",
+        },
+        CTX,
+    )
+    assert answer.success, answer.error
+    assert answer.output["status"] == "queued"
+    inbox = await rt.store.inbox_for("scout")
+    assert inbox[-1].msg_type is MsgType.ANSWER
+
 async def test_message_gates(rt: SocietyRuntime):
     tool = MessageAgentTool(rt, "scout")
     assert (await tool.execute({"target": "nobody", "text": "x"}, CTX)).output["reason"] == (

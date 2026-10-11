@@ -32,24 +32,42 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Final
+from uuid import uuid4
+from weakref import WeakValueDictionary
 
 from .delivery import DeliveryBusy
 from .events import SCHEDULER_ACTOR as _SCHEDULER
 from .events import USER_ACTOR as _USER
-from .events import MsgType, SocietyEnvelope, Tier
+from .events import MsgType, RoomState, SocietyEnvelope, Tier, now_ms
 from .failure_reasons import FailureReason, classify_error, retry_action
+from .rooms import Room, RoomError, Rooms
 from .roster import AgentRecord, AgentState, Roster
 from .store import SocietyStore, day_start_ms
 
 log = logging.getLogger(__name__)
 
-__all__ = ["DispatchHook", "DeliverHook", "SocietyScheduler", "validate_result"]
+__all__ = [
+    "CurateHook",
+    "DispatchHook",
+    "DeliverHook",
+    "RoomSettledHook",
+    "RoomHaltHook",
+    "RoomTurnHook",
+    "SocietyScheduler",
+    "validate_result",
+]
 
 #: ``dispatch(target, assign_envelope) -> run_id`` — starts real work under
 #: the target's identity and returns the mission/run id it started.
 DispatchHook = Callable[[AgentRecord, SocietyEnvelope], Awaitable[str]]
 #: ``deliver(target, envelope)`` — wakes the target's canonical chat.
 DeliverHook = Callable[[AgentRecord, SocietyEnvelope], Awaitable[None]]
+RoomTurnHook = Callable[[AgentRecord, Room, str], Awaitable[str]]
+RoomSettledHook = Callable[[SocietyEnvelope], Awaitable[None]]
+RoomHaltHook = Callable[[Room], Awaitable[Room]]
+# Curating a RESULT stages knowledge behind the existing human review gate.
+# This callback never dispatches work and is not a second orchestrator.
+CurateHook = Callable[[SocietyEnvelope], Awaitable[None]]
 
 MAX_DEPTH: Final[int] = 2
 DEFAULT_TRACE_MESSAGE_CAP: Final[int] = 24
@@ -75,6 +93,20 @@ def validate_result(payload: dict[str, Any]) -> str | None:
     return None
 
 
+def _handoff_owner(env: SocietyEnvelope) -> str | None:
+    """The agent a RESULT hands its next step to, if it names one."""
+    if env.msg_type is not MsgType.RESULT:
+        return None
+    owner = env.payload.get("next_owner")
+    return owner.strip() if isinstance(owner, str) and owner.strip() else None
+
+
+def _delivery_view(env: SocietyEnvelope) -> SocietyEnvelope:
+    """Address a queued RESULT handoff to its next owner; other envelopes pass through."""
+    owner = _handoff_owner(env)
+    return env.model_copy(update={"to_agent": owner}) if owner is not None else env
+
+
 class SocietyScheduler:
     def __init__(
         self,
@@ -83,16 +115,33 @@ class SocietyScheduler:
         *,
         dispatch: DispatchHook | None = None,
         deliver: DeliverHook | None = None,
+        rooms: Rooms | None = None,
+        room_turn: RoomTurnHook | None = None,
+        room_settled: RoomSettledHook | None = None,
+        room_halt: RoomHaltHook | None = None,
+        curate: CurateHook | None = None,
         budget_tracker: Any | None = None,
+        budget_tracker_getter: Callable[[], Any | None] | None = None,
         trace_message_cap: int = DEFAULT_TRACE_MESSAGE_CAP,
     ) -> None:
         self._store = store
         self._roster = roster
         self._dispatch = dispatch
         self._deliver = deliver
+        self._rooms = rooms
+        self._room_turn = room_turn
+        self._room_settled = room_settled
+        self._room_halt = room_halt
+        self._curate = curate
         self._budget = budget_tracker
+        self._budget_getter = budget_tracker_getter
         self._trace_cap = trace_message_cap
         self._delivery_lock = asyncio.Lock()
+        self._delivery_drain_requested = False
+        #: Admission locks close check→await→append races in the scheduler.
+        self._dispatch_locks: dict[str, asyncio.Lock] = {}
+        self._trace_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
+        self._trace_admissions: dict[str, int] = {}
         #: run_id → agent_id of work the scheduler started and has not seen end.
         self._running: dict[str, str] = {}
         self._unsubscribe: Callable[[], None] | None = None
@@ -109,6 +158,19 @@ class SocietyScheduler:
             self._unsubscribe()
             self._unsubscribe = None
 
+    def _dispatch_lock(self, agent_id: str) -> asyncio.Lock:
+        lock = self._dispatch_locks.get(agent_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._dispatch_locks[agent_id] = lock
+        return lock
+
+    def _trace_lock(self, trace_id: str) -> asyncio.Lock:
+        lock = self._trace_locks.get(trace_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._trace_locks[trace_id] = lock
+        return lock
     @property
     def running(self) -> dict[str, str]:
         return dict(self._running)
@@ -128,13 +190,167 @@ class SocietyScheduler:
         self._running.clear()
         return count
 
+    async def recover_run_slots(self) -> None:
+        """Replay durable CLAIM/RESULT ownership with the live release rules."""
+        events = await self._store.events_since(0, limit=1000)
+        while len(events) == 1000:
+            tail = events[-1].seq
+            more = await self._store.events_since(tail, limit=1000)
+            if not more:
+                break
+            events.extend(more)
+        recovered: dict[str, str] = {}
+        for env in events:
+            if env.msg_type is MsgType.CLAIM:
+                run_id = env.payload.get("run_id")
+                if isinstance(run_id, str) and run_id.strip() and env.from_agent != _SCHEDULER:
+                    recovered[run_id.strip()] = env.from_agent
+            elif env.msg_type is MsgType.RESULT:
+                # Recovery must preserve the same ownership boundary as the
+                # live observer. A forged foreign run id releases nothing;
+                # an absent id releases the sender's oldest owned slot.
+                self._release_result_run(env, running=recovered)
+        for run_id, agent_id in recovered.items():
+            self._running.setdefault(run_id, agent_id)
+    async def drive_rooms(self) -> None:
+        """Resume every running room. Safe to call repeatedly from recovery."""
+        if self._rooms is None or self._room_turn is None:
+            return
+        for room in await self._rooms.list(state=RoomState.RUNNING):
+            await self.drive_room(room.room_id)
+
+    async def drive_room(self, room_id: str) -> None:
+        """Advance one bounded room by at most one canonical-chat turn."""
+        rooms = self._rooms
+        dispatch = self._room_turn
+        if rooms is None or dispatch is None:
+            return
+        room = await rooms.get(room_id)
+        if room is None or room.state is not RoomState.RUNNING or not room.live:
+            return
+        if await self._store.kill_switch():
+            if self._room_halt is not None:
+                await self._room_halt(room)
+            else:
+                await rooms.settle(room_id, reason="kill_switch")
+            return
+
+        prefix = f"room:{room_id}:"
+        if room.inflight_claim_id and any(run_id.startswith(prefix) for run_id in self._running):
+            return
+
+        target_id = room.inflight_member or room.next_speaker
+        if not target_id:
+            await rooms.fail(room_id, reason=str(FailureReason.INTERNAL_ERROR))
+            return
+        target = await self._roster.resolve(target_id)
+        if target is None or target.state is AgentState.ARCHIVED:
+            await rooms.fail(room_id, reason=str(FailureReason.TARGET_UNKNOWN))
+            return
+        if target.state is AgentState.PAUSED:
+            await rooms.fail(room_id, reason=str(FailureReason.TARGET_PAUSED))
+            return
+
+        if not room.inflight_claim_id:
+            if await self._store.count_in_trace(room.trace_id) > self._trace_cap:
+                await rooms.fail(room_id, reason=str(FailureReason.MESSAGE_CAP))
+                return
+            budget = self._budget_getter() if self._budget_getter is not None else self._budget
+            if budget is not None:
+                try:
+                    budget.assert_under_limit(room.trace_id)
+                except Exception as exc:  # noqa: BLE001 — tracker owns its exception type
+                    log.info("society room %s budget gate refused dispatch: %s", room_id, exc)
+                    await rooms.fail(room_id, reason=str(FailureReason.BUDGET_EXHAUSTED))
+                    return
+            if target.daily_budget_usd > 0:
+                spent = await self._store.cost_since(target.agent_id, day_start_ms(now_ms()))
+                if spent >= target.daily_budget_usd:
+                    await rooms.fail(room_id, reason=str(FailureReason.BUDGET_EXHAUSTED))
+                    return
+            if self.active_runs(target.agent_id) >= target.max_concurrent_runs:
+                return
+
+        async with self._dispatch_lock(target.agent_id):
+            # Refresh after waiting: another room may have consumed this
+            # recipient's slot while this one waited for its per-agent lock.
+            if await self._store.kill_switch():
+                if self._room_halt is not None:
+                    await self._room_halt(room)
+                else:
+                    await rooms.settle(room_id, reason="kill_switch")
+                return
+            room = await rooms.get(room_id)
+            if room is None or room.state is not RoomState.RUNNING or not room.live:
+                return
+            target_id = room.inflight_member or room.next_speaker
+            if not target_id:
+                await rooms.fail(room_id, reason=str(FailureReason.INTERNAL_ERROR))
+                return
+            target = await self._roster.resolve(target_id)
+            if target is None or target.state is AgentState.ARCHIVED:
+                await rooms.fail(room_id, reason=str(FailureReason.TARGET_UNKNOWN))
+                return
+            if target.state is AgentState.PAUSED:
+                await rooms.fail(room_id, reason=str(FailureReason.TARGET_PAUSED))
+                return
+            had_claim = bool(room.inflight_claim_id)
+            if not had_claim and self.active_runs(target.agent_id) >= target.max_concurrent_runs:
+                return
+            claim_id = room.inflight_claim_id or f"room-turn:{uuid4().hex}"
+            if not had_claim:
+                try:
+                    room = await rooms.claim_turn(room_id, claim_id)
+                except RoomError as exc:
+                    log.debug("society room %s claim lost a concurrent race: %s", room_id, exc)
+                    return
+            try:
+                run_id = await dispatch(target, room, claim_id)
+            except DeliveryBusy:
+                if not had_claim:
+                    try:
+                        await rooms.release_claim(room_id, claim_id)
+                    except RoomError:
+                        log.debug("society room %s claim moved while releasing busy turn", room_id)
+                return
+            except Exception as exc:  # noqa: BLE001 — failed room turns are terminal and typed
+                log.warning("society room %s dispatch failed", room_id, exc_info=True)
+                await rooms.fail(room_id, reason=str(classify_error(exc)))
+                return
+            if not isinstance(run_id, str) or not run_id.strip():
+                current = await rooms.get(room_id)
+                if (
+                    current is None
+                    or current.state is not RoomState.RUNNING
+                    or current.inflight_claim_id != claim_id
+                ):
+                    return
+                log.warning("society room %s dispatch returned no usable run id", room_id)
+                await rooms.fail(room_id, reason=str(FailureReason.INTERNAL_ERROR))
+                return
+            self._running[run_id.strip()] = target.agent_id
     # ------------------------------------------------------------ handler
 
     async def on_envelope(self, env: SocietyEnvelope) -> None:
-        if env.from_agent == _SCHEDULER:
+        if env.from_agent == _SCHEDULER and env.msg_type is not MsgType.ROOM_SETTLE:
             return
         if env.msg_type is MsgType.ASSIGN:
             await self._on_assign(env)
+        elif (
+            env.msg_type is MsgType.ROOM_OPEN
+            and isinstance(env.payload.get("room_id"), str)
+        ):
+            await self.drive_room(str(env.payload["room_id"]))
+        elif env.msg_type is MsgType.ROOM_SETTLE:
+            if self._room_settled is not None:
+                try:
+                    await self._room_settled(env)
+                except Exception:  # noqa: BLE001 — notification cannot invalidate terminal room state
+                    log.warning(
+                        "society scheduler: room notification failed for %s",
+                        env.trace_id,
+                        exc_info=True,
+                    )
         elif env.msg_type is MsgType.RESULT:
             await self._on_result(env)
         elif env.msg_type in _DELIVERED and env.to_agent and env.to_agent != _USER:
@@ -223,90 +439,219 @@ class SocietyScheduler:
                 env, FailureReason.MESSAGE_CAP, f"trace exceeded {self._trace_cap} messages"
             )
             return
-        if self._budget is not None:
+        budget = self._budget_getter() if self._budget_getter is not None else self._budget
+        if budget is not None:
             try:
-                self._budget.assert_under_limit(env.trace_id)
+                budget.assert_under_limit(env.trace_id)
             except Exception as exc:  # noqa: BLE001 — BudgetExceeded is the tracker's own type
                 await self._veto(env, FailureReason.BUDGET_EXHAUSTED, str(exc))
                 return
-        if target.daily_budget_usd > 0:
-            spent = await self._store.cost_since(target.agent_id, day_start_ms(env.ts_ms))
-            if spent >= target.daily_budget_usd:
-                await self._veto(
-                    env,
-                    FailureReason.BUDGET_EXHAUSTED,
-                    f"{target.name} spent ${spent:.2f} of ${target.daily_budget_usd:.2f} today",
+        async with self._trace_lock(env.trace_id):
+            async with self._dispatch_lock(target.agent_id):
+                if await self._store.kill_switch():
+                    await self._veto(env, FailureReason.KILL_SWITCH, "the society is halted")
+                    return
+                # Re-resolve under both admission locks: the target may have
+                # changed state while another event was being dispatched.
+                trace_count = await self._store.count_in_trace(env.trace_id)
+                reserved = self._trace_admissions.get(env.trace_id, 0)
+                if trace_count > self._trace_cap or (
+                    trace_count == 0 and reserved >= self._trace_cap
+                ):
+                    await self._veto(
+                        env,
+                        FailureReason.MESSAGE_CAP,
+                        f"trace exceeded {self._trace_cap} messages",
+                    )
+                    return
+                target = await self._resolve_target(env)
+                if isinstance(target, FailureReason):
+                    await self._veto(env, target, f"target {env.to_agent!r} cannot take work")
+                    return
+                if target.daily_budget_usd > 0:
+                    spent = await self._store.cost_since(target.agent_id, day_start_ms(env.ts_ms))
+                    if spent >= target.daily_budget_usd:
+                        await self._veto(
+                            env,
+                            FailureReason.BUDGET_EXHAUSTED,
+                            f"{target.name} spent ${spent:.2f} of "
+                            f"${target.daily_budget_usd:.2f} today",
+                        )
+                        return
+                if self.active_runs(target.agent_id) >= target.max_concurrent_runs:
+                    await self._veto(
+                        env,
+                        FailureReason.CONCURRENCY_CAP,
+                        f"{target.name} already runs {target.max_concurrent_runs} task(s)",
+                    )
+                    return
+                if self._dispatch is None:
+                    await self._veto(env, FailureReason.INTERNAL_ERROR, "no dispatcher is wired")
+                    return
+                self._trace_admissions[env.trace_id] = reserved + 1
+                try:
+                    try:
+                        run_id = await self._dispatch(target, env)
+                    except Exception as exc:  # noqa: BLE001 — a failed spawn is a typed veto, never a crash
+                        await self._veto(env, classify_error(exc), f"dispatch failed: {exc}")
+                        return
+                finally:
+                    remaining = self._trace_admissions.get(env.trace_id, 1) - 1
+                    if remaining > 0:
+                        self._trace_admissions[env.trace_id] = remaining
+                    else:
+                        self._trace_admissions.pop(env.trace_id, None)
+                if not isinstance(run_id, str) or not run_id.strip():
+                    await self._veto(
+                        env,
+                        FailureReason.INTERNAL_ERROR,
+                        "dispatch returned no usable run id",
+                    )
+                    return
+                run_id = run_id.strip()
+                self._running[run_id] = target.agent_id
+                await self._store.append_and_publish(
+                    SocietyEnvelope(
+                        msg_type=MsgType.CLAIM,
+                        from_agent=target.agent_id,
+                        to_agent=env.from_agent,
+                        trace_id=env.trace_id,
+                        parent_event_id=env.event_id,
+                        payload={"run_id": run_id, "text": f"{target.name} took the task"},
+                    )
                 )
-                return
-        if self.active_runs(target.agent_id) >= target.max_concurrent_runs:
-            await self._veto(
-                env,
-                FailureReason.CONCURRENCY_CAP,
-                f"{target.name} already runs {target.max_concurrent_runs} task(s)",
-            )
-            return
-        if self._dispatch is None:
-            await self._veto(env, FailureReason.INTERNAL_ERROR, "no dispatcher is wired")
-            return
-        try:
-            run_id = await self._dispatch(target, env)
-        except Exception as exc:  # noqa: BLE001 — a failed spawn is a typed veto, never a crash
-            await self._veto(env, classify_error(exc), f"dispatch failed: {exc}")
-            return
-        self._running[run_id] = target.agent_id
-        await self._store.append_and_publish(
-            SocietyEnvelope(
-                msg_type=MsgType.CLAIM,
-                from_agent=target.agent_id,
-                to_agent=env.from_agent,
-                trace_id=env.trace_id,
-                parent_event_id=env.event_id,
-                payload={"run_id": run_id, "text": f"{target.name} took the task"},
-            )
-        )
-
-    async def _on_result(self, env: SocietyEnvelope) -> None:
-        problem = validate_result(env.payload)
-        if problem is not None:
-            await self._veto(env, FailureReason.INVALID_RESULT, problem)
-            return
+    def _release_result_run(
+        self,
+        env: SocietyEnvelope,
+        *,
+        running: dict[str, str] | None = None,
+    ) -> None:
+        """Release only a live run slot owned by the RESULT sender."""
+        slots = self._running if running is None else running
         run_id = env.payload.get("run_id")
         if isinstance(run_id, str):
-            self._running.pop(run_id, None)
-        else:
-            # No run id: release one slot of the sender, oldest first.
-            for rid, agent in list(self._running.items()):
-                if agent == env.from_agent:
-                    self._running.pop(rid, None)
-                    break
-        next_owner = env.payload.get("next_owner")
-        if isinstance(next_owner, str) and next_owner and self._deliver is not None:
-            target = await self._resolve_target(env.model_copy(update={"to_agent": next_owner}))
-            if isinstance(target, AgentRecord):
-                await self._deliver(target, env)
+            run_id = run_id.strip()
+        if isinstance(run_id, str) and run_id:
+            owner = slots.get(run_id)
+            if owner == env.from_agent:
+                slots.pop(run_id, None)
+            elif owner is not None:
+                # A durable RESULT must never release another agent's live slot.
+                # This can happen after a stale/forged handoff carries a foreign
+                # run_id; keep the real owner accounting intact.
+                log.warning(
+                    "society: RESULT %s from %s referenced run %s owned by %s; "
+                    "preserving the live run slot",
+                    env.event_id,
+                    env.from_agent,
+                    run_id,
+                    owner,
+                )
+            return
+        # No run id: release one slot of the sender, oldest first.
+        for rid, agent in list(slots.items()):
+            if agent == env.from_agent:
+                slots.pop(rid, None)
+                break
+
+    async def _on_result(self, env: SocietyEnvelope) -> None:
+        # A malformed terminal report still ends the sender's run. Otherwise a
+        # bad RESULT can strand its concurrency slot forever while the board
+        # correctly marks the report invalid. Ownership is checked before
+        # releasing anything, so a forged/foreign run_id cannot free another
+        # agent's live work.
+        self._release_result_run(env)
+        problem = validate_result(env.payload)
+        if problem is not None:
+            await self._store.mark_delivery(
+                env.event_id, "failed", str(FailureReason.INVALID_RESULT)
+            )
+            await self._veto(env, FailureReason.INVALID_RESULT, problem)
+            return
+        if self._curate is not None:
+            try:
+                await self._curate(env)
+            except Exception:  # noqa: BLE001 — curation cannot invalidate a durable RESULT
+                log.warning(
+                    "society scheduler: curator failed for RESULT %s",
+                    env.event_id,
+                    exc_info=True,
+                )
+        # The insert trigger already queued any handoff under this event id,
+        # atomically with the RESULT, before any observer ran. Releasing a run
+        # can also allow an older busy delivery to proceed.
+        await self.drain_deliveries()
 
     async def drain_deliveries(self) -> None:
         """FIFO per recipient. Busy recipients never block other conversations."""
         if self._delivery_lock.locked():
+            # The active pass may already have captured its FIFO snapshot.
+            # Remember the concurrent trigger so it cannot strand newer work.
+            self._delivery_drain_requested = True
             return
         async with self._delivery_lock:
-            busy: set[str | None] = set()
-            for env in await self._store.pending_deliveries():
+            while True:
+                self._delivery_drain_requested = False
+                await self._drain_delivery_pass()
+                if not self._delivery_drain_requested:
+                    return
+
+    async def _drain_delivery_pass(self) -> None:
+        busy: set[str | None] = set()
+        for queued in await self._store.pending_deliveries():
+            env = _delivery_view(queued)
+            claim_id = uuid4().hex
+            if not await self._store.claim_delivery(env.event_id, claim_id):
+                # Another scheduler instance owns this recipient's FIFO
+                # head. Do not run a later queued turn around it.
+                if await self._store.delivery_status(env.event_id) == "queued":
+                    busy.add(env.to_agent)
+                continue
+            try:
+                if env.msg_type is MsgType.RESULT:
+                    if _handoff_owner(env) is None:
+                        # Python also recognizes Unicode whitespace that SQL
+                        # trim does not. A blank next_owner creates no work.
+                        await self._store.mark_delivery(env.event_id, "delivered")
+                        continue
+                    # Publication may have been interrupted before _on_result.
+                    # Invalid handoffs must not reach even a busy-chat receipt.
+                    problem = validate_result(env.payload)
+                    if problem is not None:
+                        await self._store.mark_delivery(
+                            env.event_id, "failed", str(FailureReason.INVALID_RESULT)
+                        )
+                        await self._veto(env, FailureReason.INVALID_RESULT, problem)
+                        continue
                 if await self._record_assignment_reply(env):
                     continue
                 if env.to_agent in busy:
+                    await self._store.release_delivery(env.event_id, claim_id)
                     receive = getattr(self._deliver, "receive", None)
                     target = await self._resolve_target(env)
                     if receive is not None and isinstance(target, AgentRecord):
                         try:
                             await receive(target, env)
                         except DeliveryBusy:
-                            pass  # No chat service yet; the durable queue will retry.
+                            log.info(
+                                "society: queued receipt deferred for busy recipient %s "
+                                "(event=%s); durable queue will retry",
+                                env.to_agent,
+                                env.event_id,
+                            )
                         except Exception:
-                            log.warning("society: queued receipt projection failed", exc_info=True)
+                            log.warning(
+                                "society: queued receipt projection failed", exc_info=True
+                            )
                     continue
                 if not await self._on_deliver(env):
+                    await self._store.release_delivery(env.event_id, claim_id)
                     busy.add(env.to_agent)
+            except BaseException:
+                # Cancellation or an unexpected observer failure must not
+                # strand the durable message outside the retry queue.
+                await self._store.release_delivery(env.event_id, claim_id)
+                raise
 
     async def _record_assignment_reply(self, env: SocietyEnvelope) -> bool:
         """Assignment outcomes belong to the watcher, not a second chat turn."""
@@ -326,8 +671,6 @@ class SocietyScheduler:
         return True
 
     async def _on_deliver(self, env: SocietyEnvelope) -> bool:
-        if await self._store.delivery_status(env.event_id) != "queued":
-            return True
         reason = None
         if await self._store.kill_switch():
             reason = FailureReason.KILL_SWITCH
@@ -346,6 +689,12 @@ class SocietyScheduler:
         try:
             await self._deliver(target, env)
         except DeliveryBusy:  # A busy destination keeps the delivery pending for retry.
+            log.info(
+                "society: delivery deferred for busy recipient %s "
+                "(event=%s); durable queue will retry",
+                env.to_agent,
+                env.event_id,
+            )
             return False
         except Exception as exc:  # noqa: BLE001 — persist the failure and report it
             await self._store.mark_delivery(env.event_id, "failed", str(exc))

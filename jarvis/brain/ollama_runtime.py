@@ -393,7 +393,7 @@ def start_server() -> tuple[bool, str]:
     except OSError as exc:
         # Not swallowed: the reason travels back as this function's own
         # return value and the card renders it verbatim.
-        return False, f"Could not start Ollama ({exc})."
+        return False, "Could not start Ollama. Check the application log for details."
     finally:
         if sink is not None:
             sink.close()
@@ -454,7 +454,7 @@ def stop_server() -> tuple[bool, str]:
             "If a server is still answering, it was started elsewhere."
         )
     except psutil.Error as exc:
-        return False, f"Could not inspect the Ollama process Jarvis started ({exc})."
+        return False, "Could not inspect the Ollama process Jarvis started. Check the application log for details."
     if not _process_is_ollama(proc):
         # The pid was recycled by the OS for an unrelated program.
         _forget_pid()
@@ -474,7 +474,7 @@ def stop_server() -> tuple[bool, str]:
         # It exited between the check and the signal — that IS the goal.
         log.debug("ollama-runtime: pid %s exited before the signal", pid)
     except psutil.Error as exc:
-        return False, f"Could not stop Ollama (pid {pid}): {exc}."
+        return False, "Could not stop Ollama. Check the application log for details."
     _forget_pid()
     return True, "Ollama stopped."
 
@@ -538,7 +538,7 @@ async def probe_host(base_url: str, *, transport: object | None = None) -> dict[
         }
     except (httpx.HTTPError, ValueError, AttributeError) as exc:
         latency_ms = int((time.monotonic() - started) * 1000)
-        reason = str(exc) or exc.__class__.__name__
+        reason = "connection or response error"
         return {
             "ok": False,
             "version": "",
@@ -728,12 +728,11 @@ def _run_command(cmd: list[str], *, timeout: int) -> None:
         timeout=timeout,
         creationflags=NO_WINDOW_CREATIONFLAGS,
     )
-    tail = (result.stdout or "") + (result.stderr or "")
-    for line in tail.strip().splitlines()[-5:]:
-        with _LOCK:
-            _STATE.log_tail.append(line[:200])
+    # Installer output is not safe to expose through the polling API: package
+    # managers and installers can echo paths, environment details, or credentials.
+    # Keep only the exit status; progress labels are recorded separately by _set.
     if result.returncode != 0:
-        raise RuntimeError(f"step failed (exit {result.returncode}): {' '.join(cmd[:2])}…")
+        raise RuntimeError(f"Installer step failed (exit {result.returncode}).")
 
 
 def _download(url: str, target: Path) -> None:
@@ -868,7 +867,7 @@ def ensure_runtime_blocking() -> tuple[bool, str]:
                 return False, ("the Ollama installer finished but no binary was found")
         return start_server()
     except Exception as exc:  # noqa: BLE001 — honest sentence, never a raise
-        return False, str(exc)
+        return False, "Ollama setup failed. Check the application log for details."
 
 
 def _run_install() -> None:
@@ -892,8 +891,10 @@ def _run_install() -> None:
         _set("starting", 85, "starting Ollama")
         ok, detail = start_server()
         if not ok:
-            raise RuntimeError(detail)
+            _fail(detail)
+            return
         _set("done", 100, "Ollama is installed and running")
         log.info("ollama-runtime: install completed")
-    except Exception as exc:  # noqa: BLE001 — every failure must land in the state
-        _fail(str(exc))
+    except Exception:  # noqa: BLE001 — every failure must land in the state
+        log.exception("ollama-runtime: install failed")
+        _fail("Ollama installation failed; details are available in the application log")

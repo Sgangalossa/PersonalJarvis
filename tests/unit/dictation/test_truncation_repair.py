@@ -16,6 +16,7 @@ pauses and keeps whichever reading carries more speech — never less.
 from __future__ import annotations
 
 import asyncio
+import logging
 import contextlib
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -215,6 +216,7 @@ async def test_a_window_cut_at_a_pause_is_reread_and_the_tail_recovered() -> Non
     assert "precise language" in completed.raw_text
     assert stt.calls == 3
     assert "truncation_repairs:1" in completed.stt_audit
+    assert "truncation_repair_attempts:1" in completed.stt_audit
 
 
 async def test_a_healthy_window_is_not_reread() -> None:
@@ -235,6 +237,7 @@ async def test_a_healthy_window_is_not_reread() -> None:
 
     assert stt.calls == 1
     assert "truncation_repairs:0" in _completed(events).stt_audit
+    assert "truncation_repair_attempts:0" in _completed(events).stt_audit
 
 
 # --------------------------------------------------------------------------
@@ -307,6 +310,7 @@ async def test_continuous_speech_that_came_back_short_is_reread_in_halves() -> N
     assert "finish the thought" in completed.raw_text
     assert stt.calls == 3  # the long read, then one per half
     assert "truncation_repairs:1" in completed.stt_audit
+    assert "truncation_repair_attempts:1" in completed.stt_audit
 
 
 async def test_a_halved_reread_that_finds_no_more_speech_keeps_the_original() -> None:
@@ -324,6 +328,7 @@ async def test_a_halved_reread_that_finds_no_more_speech_keeps_the_original() ->
     completed = _completed(events)
     assert completed.raw_text == "Six words is not very many."
     assert "truncation_repairs:0" in completed.stt_audit
+    assert "truncation_repair_attempts:1" in completed.stt_audit
 
 
 async def test_a_failed_run_read_keeps_the_original_transcript() -> None:
@@ -342,3 +347,36 @@ async def test_a_failed_run_read_keeps_the_original_transcript() -> None:
     completed = _completed(events)
     assert completed.raw_text == "Please use simple words."
     assert "truncation_repairs:0" in completed.stt_audit
+    assert "truncation_repair_attempts:1" in completed.stt_audit
+
+
+async def test_truncation_repair_emits_redacted_audit(caplog) -> None:
+    stt = _ScriptedSTT(
+        [
+            "Please use simple words.",
+            "Please use simple words.",
+            "by expressing yourself in simple, precise language.",
+        ]
+    )
+    pipe, _events = _session_pipeline(stt, _paused_recording())
+
+    caplog.set_level(logging.DEBUG, logger="jarvis.speech.pipeline")
+    await _run_session(pipe)
+
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if "dictation truncation audit:" in record.getMessage()
+    ]
+    assert any("original=Please use simple words." in message for message in messages)
+    assert any(
+        "piece=1/2" in message
+        and "text=Please use simple words." in message
+        for message in messages
+    )
+    assert any(
+        "piece=2/2" in message
+        and "text=by expressing yourself in simple, precise language." in message
+        for message in messages
+    )
+    assert any("replaced=True" in message for message in messages)

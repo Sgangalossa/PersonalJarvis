@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from jarvis.agent_chat.store import SURFACES, AgentChatStore
 from jarvis.society.chat_binding import ensure_session, frame_incoming, make_deliver_hook
-from jarvis.society.events import MsgType, SocietyEnvelope
+from jarvis.society.events import MsgType, SocietyEnvelope, Tier
 from jarvis.society.runtime import SocietyRuntime
 
 
@@ -49,7 +49,9 @@ class FakeService:
     def is_running(self, session_id: str) -> bool:
         return session_id in self.busy
 
-    async def send(self, session_id: str, text: str, attachments=None, *, incoming=None) -> str:
+    async def send(
+        self, session_id: str, text: str, attachments=None, *, incoming=None, read_only=False
+    ) -> str:
         self.sent.append((session_id, text))
         return "turn-1"
 
@@ -696,16 +698,44 @@ class FakeTurnService(FakeService):
         if q in subscribers:
             subscribers.remove(q)
 
-    async def send(self, session_id: str, text: str, attachments=None, *, incoming=None) -> str:
+    async def send(
+        self, session_id: str, text: str, attachments=None, *, incoming=None, read_only=False
+    ) -> str:
         self.sent.append((session_id, text))
-        return "turn-1"
-
-    async def finish(self, session_id: str, text: str, *, status: str = "ok") -> None:
-        for q in list(self.queues.get(session_id, [])):
-            q.put_nowait({"kind": "assistant_text", "payload": {"turn_id": "turn-1", "text": text}})
-            q.put_nowait(
-                {"kind": "turn_finished", "payload": {"turn_id": "turn-1", "status": status}}
+        turn_id = f"turn-{len(self.sent)}"
+        if incoming is not None:
+            await self.receive_message(session_id, incoming)
+            await self.message_status(
+                session_id,
+                incoming.message_id,
+                "delivered",
+                turn_id=turn_id,
             )
+        return turn_id
+
+    async def finish(
+        self,
+        session_id: str,
+        text: str,
+        *,
+        status: str = "ok",
+        turn_id: str | None = None,
+        cost_usd: float | None = None,
+    ) -> None:
+        from jarvis.agent_chat.events import make_event
+
+        owned_turn = turn_id or f"turn-{len(self.sent)}"
+        terminal = {"turn_id": owned_turn, "status": status}
+        if cost_usd is not None:
+            terminal["cost_usd"] = cost_usd
+        rows = [
+            make_event("assistant_text", {"turn_id": owned_turn, "text": text}),
+            make_event("turn_finished", terminal),
+        ]
+        for event in rows:
+            stored = self.store.append_event(session_id, event)
+            for q in list(self.queues.get(session_id, [])):
+                q.put_nowait(stored)
 
 
 async def test_assign_runs_in_the_canonical_chat_and_ends_as_a_result(tmp_path: Path):
@@ -713,8 +743,13 @@ async def test_assign_runs_in_the_canonical_chat_and_ends_as_a_result(tmp_path: 
 
     svc = FakeTurnService(AgentChatStore(tmp_path / "agent_chat.db"))
     cfg = SimpleNamespace(memory=SimpleNamespace(data_dir=str(tmp_path / "data")))
+    published = []
     rt = SocietyRuntime(
-        tmp_path, seed_starter_team=False, chat_service=lambda: svc, cfg=lambda: cfg
+        tmp_path,
+        seed_starter_team=False,
+        chat_service=lambda: svc,
+        cfg=lambda: cfg,
+        event_publish=published.append,
     )
     await rt.ensure_started()
     try:
@@ -726,6 +761,12 @@ async def test_assign_runs_in_the_canonical_chat_and_ends_as_a_result(tmp_path: 
         assert svc.sent[0][0] == "society:scout"
         assert svc.sent[0][1].startswith("[assignment from the user]\nFind the best VPS.")
         assert "handoff" in svc.sent[0][1]
+        receipt = svc.store.incoming_message("society:scout", env.event_id)
+        assert receipt is not None
+        assert receipt["sender_id"] == "user"
+        assert receipt["sender_kind"] == "user"
+        assert receipt["status"] == "delivered"
+        assert receipt["turn_id"] == "turn-1"
         assert rt.scheduler.running == {"turn:turn-1": "scout"}
         await svc.finish("society:scout", "Hetzner CX22 wins. Done.")
         await asyncio.sleep(0.05)
@@ -736,8 +777,589 @@ async def test_assign_runs_in_the_canonical_chat_and_ends_as_a_result(tmp_path: 
         assert result.from_agent == "scout" and result.payload["status"] == "done"
         assert result.payload["done"] == "Hetzner CX22 wins. Done."
         assert result.payload["output"] == ["chat:society:scout"]
+        attention = [
+            event for event in published
+            if type(event).__name__ == "SocietyAttentionChanged"
+        ]
+        assert len(attention) == 1
+        assert attention[0].kind == "result"
+        assert attention[0].status == "done"
+        assert attention[0].agent_ids == ("scout",)
     finally:
         await rt.close()
+
+
+@pytest.mark.parametrize("failure", ["cancelled_send", "failed_send"])
+async def test_assignment_send_failure_releases_subscription(tmp_path: Path, monkeypatch, failure):
+    import asyncio
+
+    from jarvis.society.delivery import incoming_context
+
+    svc = FakeTurnService(AgentChatStore(tmp_path / "agent_chat.db"))
+    cfg = SimpleNamespace(memory=SimpleNamespace(data_dir=str(tmp_path / "data")))
+    rt = SocietyRuntime(
+        tmp_path, seed_starter_team=False, chat_service=lambda: svc, cfg=lambda: cfg,
+    )
+    await rt.ensure_started()
+    try:
+        scout, _ = await rt.roster.create(name="Scout", provider="openai")
+        env = SocietyEnvelope(
+            msg_type=MsgType.ASSIGN, from_agent="user", to_agent="scout",
+            trace_id="interrupted-assignment", payload={"text": "Inspect the task."},
+        )
+        previous = incoming_context.get()
+        error = asyncio.CancelledError if failure == "cancelled_send" else RuntimeError
+
+        async def interrupted_send(*args, **kwargs):
+            assert incoming_context.get().message_id == env.event_id
+            raise error("assignment interrupted")
+
+        monkeypatch.setattr(svc, "send", interrupted_send)
+        with pytest.raises(error):
+            await rt._dispatch_chat(scout, env)
+        assert incoming_context.get() is previous
+        assert svc.queues["society:scout"] == []
+        assert not rt._watchers
+        assert rt.scheduler.running == {}
+    finally:
+        await rt.close()
+        svc.store.close()
+
+
+@pytest.mark.parametrize("failure", ["cancelled_send", "lost_claim"])
+async def test_room_dispatch_failure_releases_subscription_before_watcher(
+    tmp_path: Path, monkeypatch, failure: str,
+):
+    import asyncio
+
+    from jarvis.society.rooms import RoomError
+
+    svc = FakeTurnService(AgentChatStore(tmp_path / "agent_chat.db"))
+    cfg = SimpleNamespace(memory=SimpleNamespace(data_dir=str(tmp_path / "data")))
+    rt = SocietyRuntime(
+        tmp_path, seed_starter_team=False, chat_service=lambda: svc, cfg=lambda: cfg,
+    )
+    await rt.ensure_started()
+    try:
+        scout, _ = await rt.roster.create(name="Scout", provider="openai")
+        await rt.roster.create(name="Archivist", provider="openai")
+        room = await rt.rooms.open(
+            opened_by="jarvis", members=["scout", "archivist"], topic="Bounded dispatch.",
+        )
+        claimed = await rt.rooms.claim_turn(room.room_id, "claim-test")
+        original_send = svc.send
+
+        async def interrupted_send(session_id, text, *, incoming=None, read_only=False):
+            if failure == "cancelled_send":
+                raise asyncio.CancelledError
+            turn_id = await original_send(
+                session_id, text, incoming=incoming, read_only=read_only
+            )
+            await rt.rooms.settle(room.room_id, reason="user")
+            return turn_id
+
+        monkeypatch.setattr(svc, "send", interrupted_send)
+        error = asyncio.CancelledError if failure == "cancelled_send" else RoomError
+        with pytest.raises(error):
+            await rt._dispatch_room_turn(scout, claimed, "claim-test")
+        assert svc.queues["society:scout"] == []
+        assert not rt._watchers
+        assert rt.scheduler.running == {}
+        if failure == "lost_claim":
+            assert svc.cancelled_turns == ["turn-1"]
+        else:
+            durable = await rt.rooms.get(room.room_id)
+            assert durable.inflight_claim_id == "claim-test"
+            assert durable.inflight_turn_id == ""
+    finally:
+        await rt.close()
+        svc.store.close()
+
+
+async def test_room_recovery_read_failure_cancels_owner_and_releases_slot(tmp_path, monkeypatch):
+    import asyncio
+
+    import jarvis.society.runtime as runtime_module
+    from jarvis.society.events import RoomState
+
+    monkeypatch.setattr(runtime_module, "_WATCH_EVENT_POLL_SECONDS", 0.005)
+    svc = FakeTurnService(AgentChatStore(tmp_path / "agent_chat.db"))
+    cfg = SimpleNamespace(memory=SimpleNamespace(data_dir=str(tmp_path / "data")))
+    rt = SocietyRuntime(
+        tmp_path, seed_starter_team=False, chat_service=lambda: svc, cfg=lambda: cfg,
+    )
+    await rt.ensure_started()
+    try:
+        await rt.roster.create(name="Scout", provider="openai")
+        await rt.roster.create(name="Archivist", provider="openai")
+        room = await rt.rooms.open(
+            opened_by="jarvis", members=["scout", "archivist"], live=True,
+        )
+        svc.queues["society:scout"].clear()
+        await svc.finish("society:scout", "", status="cancelled", cost_usd=0.23)
+        failures = []
+
+        def unreadable_events(*args, **kwargs):
+            failures.append(args)
+            raise OSError("event reader unavailable")
+
+        monkeypatch.setattr(svc.store, "list_events", unreadable_events)
+        await asyncio.wait_for(asyncio.gather(*tuple(rt._watchers)), timeout=2)
+        assert len(failures) == 3
+        assert svc.cancelled_turns == ["turn-1"]
+        assert rt.scheduler.running == {}
+        failed = await rt.rooms.get(room.room_id)
+        assert failed.state is RoomState.FAILED
+        assert failed.settle_reason == "turn_recovery_failed"
+        assert not failed.inflight_claim_id
+        events = await rt.store.events_for_trace(room.trace_id)
+        says = [event for event in events if event.msg_type is MsgType.SAY]
+        assert len(says) == 1
+        assert says[0].cost_usd == pytest.approx(0.23)
+        assert events[-1].msg_type is MsgType.ROOM_SETTLE
+        assert events[-1].payload["failed"] is True
+    finally:
+        await rt.close()
+        svc.store.close()
+
+
+async def test_room_live_scheduler_serializes_turns_and_silence_settles(tmp_path: Path):
+    import asyncio
+
+    from jarvis.society.events import RoomState
+
+    svc = FakeTurnService(AgentChatStore(tmp_path / "agent_chat.db"))
+    cfg = SimpleNamespace(memory=SimpleNamespace(data_dir=str(tmp_path / "data")))
+    rt = SocietyRuntime(
+        tmp_path, seed_starter_team=False, chat_service=lambda: svc, cfg=lambda: cfg
+    )
+    await rt.ensure_started()
+    try:
+        await rt.roster.create(name="Scout", provider="openai")
+        await rt.roster.create(name="Archivist", provider="openai")
+        room = await rt.rooms.open(
+            opened_by="jarvis",
+            members=["scout", "archivist"],
+            topic="Pick one deployment option.",
+            live=True,
+        )
+        assert svc.sent and svc.sent[0][0] == "society:scout"
+        claimed = await rt.rooms.get(room.room_id)
+        assert claimed is not None
+        assert claimed.inflight_member == "scout"
+        assert claimed.inflight_turn_id == "turn-1"
+
+        await svc.finish("society:scout", "", turn_id="turn-1")
+        for _ in range(200):
+            if len(svc.sent) >= 2:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail("second room member was not scheduled")
+        assert svc.sent[1][0] == "society:archivist"
+
+        await svc.finish("society:archivist", "", turn_id="turn-2")
+        for _ in range(200):
+            settled = await rt.rooms.get(room.room_id)
+            if settled is not None and settled.state is RoomState.SETTLED:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail("silent room did not settle")
+        assert settled.settle_reason == "silence"
+        events = await rt.store.events_for_trace(room.trace_id)
+        assert [event.msg_type for event in events] == [MsgType.ROOM_OPEN, MsgType.ROOM_SETTLE]
+        assert rt.scheduler.running == {}
+    finally:
+        await rt.close()
+        svc.store.close()
+
+
+async def test_failed_live_room_turn_records_cost_before_failure(tmp_path: Path):
+    import asyncio
+
+    from jarvis.society.events import RoomState
+
+    svc = FakeTurnService(AgentChatStore(tmp_path / "agent_chat.db"))
+    cfg = SimpleNamespace(memory=SimpleNamespace(data_dir=str(tmp_path / "data")))
+    rt = SocietyRuntime(
+        tmp_path, seed_starter_team=False, chat_service=lambda: svc, cfg=lambda: cfg
+    )
+    await rt.ensure_started()
+    try:
+        await rt.roster.create(name="Scout", provider="openai")
+        await rt.roster.create(name="Archivist", provider="openai")
+        room = await rt.rooms.open(
+            opened_by="jarvis",
+            members=["scout", "archivist"],
+            topic="Try one provider.",
+            live=True,
+        )
+
+        await svc.finish(
+            "society:scout",
+            "",
+            status="error",
+            turn_id="turn-1",
+            cost_usd=0.29,
+        )
+        for _ in range(200):
+            failed = await rt.rooms.get(room.room_id)
+            if failed is not None and failed.state is RoomState.FAILED:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail("failed room turn did not terminalize")
+
+        events = await rt.store.events_for_trace(room.trace_id)
+        says = [event for event in events if event.msg_type is MsgType.SAY]
+        assert len(says) == 1
+        assert says[0].payload["silent"] is True
+        assert says[0].cost_usd == pytest.approx(0.29)
+        assert events[-1].msg_type is MsgType.ROOM_SETTLE
+        assert events[-1].payload["failed"] is True
+    finally:
+        await rt.close()
+        svc.store.close()
+
+
+@pytest.mark.parametrize("stop_path", ["runtime", "scheduler_recovery"])
+async def test_kill_switch_recovers_cancelled_room_cost_without_watcher_queue(
+    tmp_path: Path, stop_path: str,
+):
+    from jarvis.society.events import RoomState
+
+    svc = FakeTurnService(AgentChatStore(tmp_path / "agent_chat.db"))
+    cfg = SimpleNamespace(memory=SimpleNamespace(data_dir=str(tmp_path / "data")))
+    rt = SocietyRuntime(
+        tmp_path, seed_starter_team=False, chat_service=lambda: svc, cfg=lambda: cfg
+    )
+    await rt.ensure_started()
+    try:
+        await rt.roster.create(name="Scout", provider="openai")
+        await rt.roster.create(name="Archivist", provider="openai")
+        room = await rt.rooms.open(
+            opened_by="jarvis",
+            members=["scout", "archivist"],
+            topic="Stop this discussion.",
+            live=True,
+        )
+        assert (await rt.rooms.get(room.room_id)).inflight_turn_id == "turn-1"
+
+        # Simulate a detached subscriber: the durable terminal exists, but the
+        # room watcher cannot consume it before the kill switch reconciliation.
+        svc.queues["society:scout"].clear()
+        await svc.finish(
+            "society:scout",
+            "",
+            status="cancelled",
+            turn_id="turn-1",
+            cost_usd=0.31,
+        )
+
+        if stop_path == "runtime":
+            result = await rt.engage_kill_switch()
+            assert result["engaged"] is True
+        else:
+            # Recovery can observe the persisted flag while the master stop is
+            # still cancelling chats. It must use the same owned-turn cleanup.
+            await rt.store.set_kill_switch(True)
+            await rt.scheduler.drive_rooms()
+        settled = await rt.rooms.get(room.room_id)
+        assert settled is not None
+        assert settled.state is RoomState.SETTLED
+        assert settled.settle_reason == "kill_switch"
+        assert svc.cancelled_turns == ["turn-1"]
+        assert rt.scheduler.running == {}
+
+        events = await rt.store.events_for_trace(room.trace_id)
+        says = [event for event in events if event.msg_type is MsgType.SAY]
+        assert len(says) == 1
+        assert says[0].payload["silent"] is True
+        assert says[0].cost_usd == pytest.approx(0.31)
+        assert events[-1].msg_type is MsgType.ROOM_SETTLE
+        assert events[-1].payload.get("failed") is not True
+    finally:
+        await rt.close()
+        svc.store.close()
+
+
+async def test_settle_missing_room_reports_typed_failure(world):
+    from jarvis.society.failure_reasons import FailureReason
+    from jarvis.society.rooms import RoomError
+
+    rt, _, _ = world
+    with pytest.raises(RoomError) as caught:
+        await rt.settle_room("missing-room", reason="user")
+    assert caught.value.reason == FailureReason.TARGET_UNKNOWN
+
+
+async def test_manual_room_settle_cancels_owned_turn_and_recovers_cost(tmp_path: Path):
+    from jarvis.society.events import RoomState
+
+    svc = FakeTurnService(AgentChatStore(tmp_path / "agent_chat.db"))
+    cfg = SimpleNamespace(memory=SimpleNamespace(data_dir=str(tmp_path / "data")))
+    rt = SocietyRuntime(
+        tmp_path, seed_starter_team=False, chat_service=lambda: svc, cfg=lambda: cfg
+    )
+    await rt.ensure_started()
+    try:
+        await rt.roster.create(name="Scout", provider="openai")
+        await rt.roster.create(name="Archivist", provider="openai")
+        room = await rt.rooms.open(
+            opened_by="jarvis",
+            members=["scout", "archivist"],
+            topic="Stop manually.",
+            live=True,
+        )
+        assert rt.scheduler.running == {f"room:{room.room_id}:turn-1": "scout"}
+
+        svc.queues["society:scout"].clear()
+        await svc.finish(
+            "society:scout",
+            "",
+            status="cancelled",
+            turn_id="turn-1",
+            cost_usd=0.17,
+        )
+        settled = await rt.settle_room(room.room_id, reason="user", by="user")
+
+        assert settled.state is RoomState.SETTLED
+        assert settled.settle_reason == "user"
+        assert svc.cancelled_turns == ["turn-1"]
+        assert rt.scheduler.running == {}
+        events = await rt.store.events_for_trace(room.trace_id)
+        says = [event for event in events if event.msg_type is MsgType.SAY]
+        assert len(says) == 1
+        assert says[0].payload["silent"] is True
+        assert says[0].cost_usd == pytest.approx(0.17)
+        assert events[-1].msg_type is MsgType.ROOM_SETTLE
+    finally:
+        await rt.close()
+        svc.store.close()
+
+
+async def test_m4_voice_group_delegation_exit_contract(tmp_path: Path):
+    import asyncio
+    from uuid import uuid4
+
+    from jarvis.plugins.tool.delegate_to_agent import DelegateToAgentTool
+    from jarvis.society.events import RoomState
+
+    published = []
+
+    def publish(event):
+        published.append(event)
+
+    svc = FakeTurnService(AgentChatStore(tmp_path / "agent_chat.db"))
+    cfg = SimpleNamespace(memory=SimpleNamespace(data_dir=str(tmp_path / "data")))
+    rt = SocietyRuntime(
+        tmp_path,
+        seed_starter_team=False,
+        chat_service=lambda: svc,
+        cfg=lambda: cfg,
+        event_publish=publish,
+    )
+    await rt.ensure_started()
+    try:
+        await rt.roster.create(name="Scout", provider="openai")
+        await rt.roster.create(name="Archivist", provider="openai")
+        ctx = SimpleNamespace(
+            trace_id=uuid4(),
+            user_utterance="Jarvis, lass Scout und Archivist das zusammen klären",  # i18n-allow
+            config={"output_language": "de"},
+            memory_read=None,
+        )
+        result = await DelegateToAgentTool(runtime_resolver=lambda: rt).execute(
+            {
+                "agents": ["Scout", "Archivist"],
+                "task": "Wählt gemeinsam einen Deployment-Anbieter.",  # i18n-allow
+                "reply_policy": "always",
+                "turn_language": "de",
+            },
+            ctx,
+        )
+        assert result.success, result.error
+        assert result.output["state"] == "running"
+        assert result.output["acknowledgement"] == (
+            "Scout, Archivist klären das zusammen, ich sage Bescheid."  # i18n-allow
+        )
+        room = await rt.rooms.get(result.output["room_id"])
+        assert room is not None
+        assert room.live is True
+        assert room.members == ["scout", "archivist"]
+        assert room.max_rounds == 3 if hasattr(room, "max_rounds") else True
+
+        sessions = ["society:scout", "society:archivist"] * 3
+        for turn_number, session_id in enumerate(sessions, start=1):
+            for _ in range(200):
+                if len(svc.sent) >= turn_number:
+                    break
+                await asyncio.sleep(0.01)
+            else:
+                pytest.fail(f"room turn {turn_number} was not scheduled")
+            await svc.finish(
+                session_id,
+                f"Beitrag {turn_number}",  # i18n-allow
+                turn_id=f"turn-{turn_number}",
+                cost_usd=turn_number / 100,
+            )
+
+        for _ in range(200):
+            settled = await rt.rooms.get(room.room_id)
+            announcements = [
+                event
+                for event in published
+                if getattr(event, "source_layer", "") == "society.lead"
+                and getattr(event, "kind", "") == "completion"
+            ]
+            if settled is not None and settled.state is RoomState.SETTLED and announcements:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail("M4 room completion did not reach the voice announcement path")
+
+        assert settled.settle_reason == "round_cap"
+        events = await rt.store.events_for_trace(room.trace_id)
+        says = [event for event in events if event.msg_type is MsgType.SAY]
+        assert len(says) == 6
+        assert sum(event.cost_usd for event in says) == pytest.approx(0.21)
+        assert events[0].msg_type is MsgType.ROOM_OPEN
+        assert events[0].payload["max_rounds"] == 3
+        assert events[0].payload["max_messages"] == 10
+        assert events[-1].msg_type is MsgType.ROOM_SETTLE
+
+        world_rooms = [
+            event for event in published
+            if type(event).__name__ == "SocietyRoomChanged"
+            and getattr(event, "room_id", "") == room.room_id
+        ]
+        assert [event.phase for event in world_rooms] == ["open", "settle"]
+        assert world_rooms[0].members == ("scout", "archivist")
+        assert (world_rooms[0].max_rounds, world_rooms[0].max_messages) == (3, 10)
+
+        announcement = announcements[-1]
+        attention = [
+            event for event in published
+            if type(event).__name__ == "SocietyAttentionChanged"
+        ]
+        assert len(attention) == 1
+        assert attention[0].kind == "room"
+        assert attention[0].agent_ids == ("scout", "archivist")
+        assert "Runde mit Scout, Archivist" in announcement.text
+        assert "Beitrag 1" in announcement.report
+        assert "Beitrag 6" in announcement.report
+        assert rt.scheduler.running == {}
+    finally:
+        await rt.close()
+        svc.store.close()
+
+
+async def test_room_recovery_consumes_terminal_without_replaying_owner(tmp_path: Path):
+    import asyncio
+
+    from jarvis.agent_chat.events import make_event
+    from jarvis.society.delivery import IncomingMessage
+    from jarvis.society.rooms import Rooms
+    from jarvis.society.roster import Roster
+    from jarvis.society.store import SocietyStore
+
+    society_store = SocietyStore(tmp_path / "society.db")
+    await society_store.open()
+    roster = Roster(society_store)
+    await roster.create(name="Jarvis", tier=Tier.LEAD)
+    await roster.create(name="Scout", provider="openai")
+    await roster.create(name="Archivist", provider="openai")
+    rooms = Rooms(society_store)
+    room = await rooms.open(
+        opened_by="jarvis",
+        members=["scout", "archivist"],
+        topic="Recover this room.",
+        live=True,
+    )
+    await rooms.claim_turn(room.room_id, "claim-recover")
+    await rooms.bind_turn(room.room_id, "claim-recover", "turn-recover")
+    await society_store.close()
+
+    chat_store = AgentChatStore(tmp_path / "agent_chat.db")
+    chat_store.create_session(
+        session_id="society:scout",
+        surface="society",
+        provider="openai",
+        model="",
+        effort="",
+        cwd=str(tmp_path),
+        permission_mode="ask",
+    )
+    incoming = IncomingMessage(
+        message_id="claim-recover",
+        sender_id="jarvis",
+        sender_name="jarvis",
+        sender_kind="jarvis",
+        text="Recover this room.",
+        prompt="room prompt",
+        trace_id=room.trace_id,
+    )
+    chat_store.append_event(
+        "society:scout",
+        make_event("agent_message", incoming.model_dump()),
+    )
+    chat_store.append_event(
+        "society:scout",
+        make_event(
+            "agent_message_status",
+            {
+                "message_id": "claim-recover",
+                "status": "delivered",
+                "turn_id": "turn-recover",
+                "error": "",
+            },
+        ),
+    )
+    chat_store.append_event(
+        "society:scout",
+        make_event(
+            "assistant_text",
+            {"turn_id": "turn-recover", "text": "Recovered contribution."},
+        ),
+    )
+    chat_store.append_event(
+        "society:scout",
+        make_event(
+            "turn_finished",
+            {"turn_id": "turn-recover", "status": "done", "cost_usd": 0.37},
+        ),
+    )
+
+    svc = FakeTurnService(chat_store)
+    cfg = SimpleNamespace(memory=SimpleNamespace(data_dir=str(tmp_path / "data")))
+    rt = SocietyRuntime(
+        tmp_path, seed_starter_team=False, chat_service=lambda: svc, cfg=lambda: cfg
+    )
+    await rt.ensure_started()
+    try:
+        for _ in range(80):
+            loaded = await rt.rooms.get(room.room_id)
+            if (
+                loaded is not None
+                and loaded.message_count == 1
+                and loaded.inflight_member == "archivist"
+            ):
+                break
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail("room terminal was not recovered")
+        assert [session for session, _ in svc.sent] == ["society:archivist"]
+        assert loaded.next_speaker == "archivist"
+        events = await rt.store.events_for_trace(room.trace_id)
+        says = [event for event in events if event.msg_type is MsgType.SAY]
+        assert len(says) == 1
+        assert says[0].from_agent == "scout"
+        assert says[0].text == "Recovered contribution."
+        assert says[0].cost_usd == pytest.approx(0.37)
+    finally:
+        await rt.close()
+        chat_store.close()
 
 
 async def test_failed_turn_becomes_a_blocked_result(tmp_path: Path):

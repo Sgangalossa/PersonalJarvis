@@ -294,7 +294,7 @@ async def get_index(
                 index = CommunityIndex.model_validate(response.json())
                 new_etag = response.headers.get("etag") or None
         except (httpx.HTTPError, ValueError, ValidationError) as exc:
-            logger.warning("community index: fetch failed (%s)", exc)
+            logger.warning("community index: fetch failed")
             if hit:
                 return hit[1], "stale"
             return None, "unavailable"

@@ -123,6 +123,22 @@ def test_start_without_a_binary_names_the_fix(monkeypatch) -> None:
     assert "install" in detail.lower()
 
 
+def test_start_redacts_os_error_details(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(ollama_runtime, "_server_version", lambda timeout=1.5: None)
+    monkeypatch.setattr(ollama_runtime, "find_binary", lambda: "/usr/bin/ollama")
+    monkeypatch.setattr(ollama_runtime, "_log_path", lambda: tmp_path / "server.log")
+
+    def fail_popen(*args: Any, **kwargs: Any) -> None:
+        raise OSError("permission denied at /private/user/token.txt")
+
+    monkeypatch.setattr(subprocess, "Popen", fail_popen)
+    ok, detail = ollama_runtime.start_server()
+    assert ok is False
+    assert "Could not start Ollama" in detail
+    assert "/private/user/token.txt" not in detail
+    assert "permission denied" not in detail
+
+
 def test_start_spawns_detached_and_waits_for_the_port(monkeypatch) -> None:
     monkeypatch.setattr(ollama_runtime, "_server_version", lambda timeout=1.5: None)
     monkeypatch.setattr(ollama_runtime, "find_binary", lambda: "/usr/bin/ollama")
@@ -362,6 +378,37 @@ def test_stop_with_a_dead_pid_forgets_the_record(monkeypatch, tmp_path) -> None:
     assert "not started by Jarvis" in ollama_runtime.stop_server()[1]
 
 
+def test_stop_redacts_process_inspection_errors(monkeypatch, tmp_path) -> None:
+    import psutil
+
+    ollama_runtime._record_pid(4711, "/usr/bin/ollama")
+
+    def denied(pid: int):
+        raise psutil.Error("private=/home/user/.config/secret-token")
+
+    monkeypatch.setattr(psutil, "Process", denied)
+    ok, detail = ollama_runtime.stop_server()
+    assert ok is False
+    assert "Check the application log" in detail
+    assert "/home/user/.config/secret-token" not in detail
+
+
+def test_stop_redacts_process_termination_errors(monkeypatch, tmp_path) -> None:
+    import psutil
+
+    class DeniedProcess(_FakeProcess):
+        def terminate(self) -> None:
+            raise psutil.Error("private=/home/user/.config/secret-token")
+
+    _FakeProcess.instances.clear()
+    ollama_runtime._record_pid(4711, "/usr/bin/ollama")
+    monkeypatch.setattr(psutil, "Process", DeniedProcess)
+    ok, detail = ollama_runtime.stop_server()
+    assert ok is False
+    assert "Check the application log" in detail
+    assert "/home/user/.config/secret-token" not in detail
+
+
 def test_stop_terminates_only_the_recorded_ollama_process(monkeypatch, tmp_path) -> None:
     import psutil
 
@@ -446,7 +493,7 @@ async def test_probe_host_unreachable_is_one_sentence() -> None:
     import httpx
 
     def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("connection refused")
+        raise httpx.ConnectError("connection refused; secret=/private/user/token.txt")
 
     result = await ollama_runtime.probe_host(
         "http://127.0.0.1:9", transport=httpx.MockTransport(handler)
@@ -454,6 +501,8 @@ async def test_probe_host_unreachable_is_one_sentence() -> None:
     assert result["ok"] is False
     assert result["version"] == ""
     assert "No Ollama answered at http://127.0.0.1:9" in str(result["detail"])
+    assert "connection refused" not in str(result["detail"])
+    assert "/private/user/token.txt" not in str(result["detail"])
 
 
 # ── env_guide per OS ─────────────────────────────────────────────────────

@@ -1,8 +1,10 @@
 """Integration test: the updater's real git operations against a local repo.
 
-A real bare upstream and installed clone prove that the managed guard requires
-the marker plus official-slug origin, and that apply fetches the exact published
-tag without mutating the running checkout. Only the release-API edge is mocked.
+A real bare upstream and installed clone exercise the managed update transaction
+and prove that apply pins the fetched tag without mutating the live checkout.
+The official GitHub-origin policy is tested separately against real URL forms;
+these tests explicitly trust their temporary local remote to exercise real git.
+Only the release-API edge is mocked.
 """
 from __future__ import annotations
 
@@ -37,8 +39,8 @@ def _git_output(args: list[str], cwd: Path) -> str:
 
 
 def _make_upstream_and_install(tmp_path: Path) -> tuple[Path, Path, Path]:
-    # The upstream path deliberately contains the official slug so the real
-    # origin-URL guard passes against a purely local remote.
+    # Production rejects local-path origins; tests opt this temporary remote
+    # into trust explicitly so the Git transaction still uses a real local repo.
     upstream = tmp_path / "PersonalJarvis" / "PersonalJarvis.git"
     upstream.parent.mkdir(parents=True)
     _git(["init", "--bare", "-b", "main", str(upstream)], tmp_path)
@@ -61,10 +63,24 @@ def _make_upstream_and_install(tmp_path: Path) -> tuple[Path, Path, Path]:
     return upstream, seed, install
 
 
+def _trust_local_fixture(monkeypatch: pytest.MonkeyPatch, upstream: Path) -> None:
+    """Trust only this test's temporary bare repository, never a URL or another path."""
+    expected = upstream.resolve()
+
+    def is_fixture_remote(url: str) -> bool:
+        try:
+            return Path(url).resolve() == expected
+        except (OSError, ValueError):
+            return False
+
+    monkeypatch.setattr(u, "_remote_is_official", is_fixture_remote)
+
+
 def test_managed_guard_passes_with_real_git(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _upstream, _seed, install = _make_upstream_and_install(tmp_path)
+    _trust_local_fixture(monkeypatch, _upstream)
     monkeypatch.setattr(u, "_repo_root", lambda: install)
     resolved = asyncio.run(u._resolve_managed_repo())
     assert resolved == install
@@ -78,6 +94,7 @@ def test_real_apply_fetches_and_pins_without_mutating_live_head(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _upstream, seed, install = _make_upstream_and_install(tmp_path)
+    _trust_local_fixture(monkeypatch, _upstream)
 
     # Publish a new upstream commit B (bumped version).
     (seed / "jarvis" / "__init__.py").write_text('__version__ = "9.9.10"\n', encoding="utf-8")

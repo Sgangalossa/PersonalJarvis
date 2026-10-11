@@ -82,7 +82,28 @@ class _CapturedPixels:
     data: bytes | bytearray | memoryview
 
 
-_RawCapture = tuple[tuple[int, int], bytes] | _CapturedPixels
+RawCapture = tuple[tuple[int, int], bytes] | _CapturedPixels
+_RawCapture = RawCapture
+
+
+def raw_pixels(
+    size: tuple[int, int],
+    data: bytes | bytearray | memoryview,
+    *,
+    pixel_format: str = "RGB",
+) -> RawCapture:
+    """Wrap externally captured pixels without an unnecessary color copy.
+
+    Packed RGB keeps the public Grabber tuple contract. Native BGRX stays in
+    its four-byte layout until Pillow builds the image, matching the optimized
+    local MSS path used by stable-frame capture.
+    """
+    fmt = str(pixel_format).upper()
+    if fmt == "RGB":
+        return (size, bytes(data))
+    if fmt == "BGRX":
+        return _CapturedPixels(size, data)
+    raise ValueError(f"unsupported pixel format: {pixel_format!r}")
 
 
 def _capture_size(raw: _RawCapture) -> tuple[int, int]:

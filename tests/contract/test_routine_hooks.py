@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 from uuid import uuid4
 
@@ -12,7 +14,7 @@ from fastapi import FastAPI
 from pydantic import ValidationError
 
 from jarvis.core.bus import EventBus
-from jarvis.tasks import webhook_auth
+from jarvis.tasks import external_auth, webhook_auth
 from jarvis.tasks.hook_inbox import MAX_PAYLOAD_BYTES, encode_payload, matches
 from jarvis.tasks.runner import TaskRunner
 from jarvis.tasks.scheduler import TaskScheduler
@@ -43,6 +45,7 @@ class Brain:
 async def world(tmp_path, monkeypatch):
     keys = {}
     monkeypatch.setattr(webhook_auth, "get_secret", keys.get)
+    monkeypatch.setattr(external_auth, "get_secret", keys.get)
 
     def save(key, value):
         keys[key] = value
@@ -137,6 +140,52 @@ async def test_webhook_authentication_scope_and_payload_execution(world):
     listed = await client.get("/api/tasks", headers={"Authorization": "Bearer test-control"})
     assert token not in listed.text
     assert token not in (await store.get(tid))["spec_json"]
+
+
+async def test_github_pr_merge_filter_is_signed_idempotent_and_dispatches(world):
+    store, scheduler, brain, client, _ = world
+    tid = await create(
+        scheduler,
+        TriggerWebhook(
+            provider="github",
+            conditions={"action": "closed", "pull_request.merged": True},
+        ),
+    )
+    cfg = await connection(client, tid)
+
+    def signed(payload, delivery):
+        raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        digest = hmac.new(cfg["token"].encode(), raw, hashlib.sha256).hexdigest()
+        return raw, {
+            "X-Hub-Signature-256": "sha256=" + digest,
+            "X-GitHub-Delivery": delivery,
+        }
+
+    raw, request_headers = signed(
+        {"action": "closed", "pull_request": {"merged": False}}, "not-merged"
+    )
+    filtered = await client.post(cfg["path"], content=raw, headers=request_headers)
+    assert filtered.status_code == 202
+    assert filtered.json()["status"] == "filtered"
+
+    merged_payload = {"action": "closed", "pull_request": {"merged": True}}
+    raw, request_headers = signed(merged_payload, "merge-1")
+    queued = await client.post(cfg["path"], content=raw, headers=request_headers)
+    assert queued.status_code == 202
+    assert queued.json()["status"] == "queued"
+
+    replay = await client.post(
+        cfg["path"],
+        content=raw,
+        headers={**request_headers, "X-GitHub-Delivery": "merge-2"},
+    )
+    assert replay.status_code == 202
+    assert replay.json()["status"] == "duplicate"
+
+    await drain(scheduler)
+    assert len(brain.prompts) == 1
+    assert '"merged": true' in brain.prompts[0]
+    assert await store.hooks.counts(tid) == (1, 0)
 
 
 async def test_duplicate_deliveries_are_idempotent_and_conflicts_refused(world):

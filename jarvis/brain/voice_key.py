@@ -42,8 +42,14 @@ def voice_key_slots(cfg: Any) -> frozenset[str]:
         from jarvis.core.registry import load
 
         provider_cls = load(_REALTIME_GROUP, provider_id)
-    except Exception:  # noqa: BLE001 - an unloadable plugin bills nothing
-        log.debug("voice_key_slots: realtime plugin %r not loadable", provider_id, exc_info=True)
+    except Exception as exc:  # noqa: BLE001 - an unloadable plugin bills nothing
+        # Do not emit a traceback here: plugin-loading errors can include
+        # credential-bearing locals in exception messages or frames.
+        log.debug(
+            "voice_key_slots: realtime plugin %r not loadable (%s)",
+            provider_id,
+            type(exc).__name__,
+        )
         return frozenset()
     candidates = tuple(getattr(provider_cls, "credential_candidates", ()) or ())
     return frozenset(str(slot) for slot, _env in candidates if slot)
@@ -74,7 +80,7 @@ def _signed_in_on_subscription(brain_provider: str) -> bool:
     try:
         from jarvis.ui.web.provider_spec import PROVIDERS, provider_billing
     except Exception:  # noqa: BLE001 - no cards means no subscription to protect
-        log.debug("voice_key: provider cards unavailable", exc_info=True)
+        log.debug("voice_key: provider cards unavailable")
         return False
     if not any(
         spec.id == brain_provider and provider_billing(spec).startswith("subscription")
@@ -86,7 +92,8 @@ def _signed_in_on_subscription(brain_provider: str) -> bool:
 
         return _keyless_provider_is_rescued_by_oauth(brain_provider)
     except Exception:  # noqa: BLE001 - a failed probe is not a login
-        log.debug("voice_key: login probe failed for %s", brain_provider, exc_info=True)
+        # Provider identity and exception metadata may be secret-tainted.
+        log.debug("voice_key: login probe failed")
         return False
 
 

@@ -33,6 +33,7 @@ from jarvis.costs.cli_usage_index import (
     AGENT_CLAUDE,
     AGENT_CODEX,
     AGENT_KIMI,
+    AGENT_GLM,
     entries,
     index_db_path,
     index_state,
@@ -41,6 +42,7 @@ from jarvis.costs.cli_usage_index import (
 )
 
 _FAR_FUTURE = 2**62
+T0 = 0
 
 
 # ---------------------------------------------------------------------------
@@ -533,6 +535,203 @@ def test_codex_fork_replays_its_parent_but_is_counted_once(tmp_path: Path) -> No
     # The replayed rows had no model; the parent's copy supplied it — and the
     # fork's own new turn inherits the session's model as well.
     assert {t.model for t in turns} == {"gpt-5.6-terra"}
+
+
+def test_cli_index_persists_account_id_and_reindexes_when_owner_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = tmp_path / "data"
+    home = tmp_path / "home"
+    transcript = _claude_path(home)
+
+    monkeypatch.setattr(
+        "jarvis.costs.cli_usage_index._account_id_for_root",
+        lambda agent, root: "claude:work",
+    )
+    _write(transcript, [_claude_line(uuid="u1", msg_id="msg_a")])
+    refresh(data_dir=data, home=home)
+
+    (first,) = _all(data)
+    assert first.account_id == "claude:work"
+    (first_rollup,) = rollups(
+        data_dir=data, since_ms=0, until_ms=_FAR_FUTURE, bucket_ms=86_400_000
+    )
+    assert first_rollup.account_id == "claude:work"
+
+    monkeypatch.setattr(
+        "jarvis.costs.cli_usage_index._account_id_for_root",
+        lambda agent, root: "claude:other",
+    )
+    refresh(data_dir=data, home=home)
+
+    (second,) = _all(data)
+    assert second.account_id == "claude:other"
+    import sqlite3
+
+    with sqlite3.connect(index_db_path(data)) as conn:
+        column = conn.execute(
+            "PRAGMA table_info(cli_turns)"
+        ).fetchall()
+        assert any(row[1] == "account_id" for row in column)
+        stored = conn.execute("SELECT account_id FROM cli_turns").fetchone()
+    assert stored[0] == "claude:other"
+
+
+def test_cli_account_root_mapping_uses_registry_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    from jarvis import agent_accounts
+    from jarvis.costs import cli_usage_index
+
+    root = tmp_path / ".claude"
+    monkeypatch.setattr(
+        agent_accounts,
+        "list_accounts",
+        lambda platform: [
+            SimpleNamespace(
+                id="claude:work",
+                config_dir=root,
+            )
+        ],
+    )
+
+    assert cli_usage_index._account_id_for_root(AGENT_CLAUDE, root) == "claude:work"
+
+
+def test_schema_five_index_migrates_and_reindexes_with_account_attribution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = tmp_path / "data"
+    db = data / "cli_usage_index.db"
+    db.parent.mkdir(parents=True)
+    old_cli_turns = """
+    CREATE TABLE cli_turns (
+        agent TEXT NOT NULL, dedup_key TEXT NOT NULL, path TEXT NOT NULL DEFAULT '',
+        session_id TEXT NOT NULL DEFAULT '', ts_ms INTEGER NOT NULL DEFAULT 0,
+        model TEXT NOT NULL DEFAULT '', tokens_in INTEGER NOT NULL DEFAULT 0,
+        tokens_out INTEGER NOT NULL DEFAULT 0, tokens_cached INTEGER NOT NULL DEFAULT 0,
+        cwd TEXT NOT NULL DEFAULT '', label TEXT NOT NULL DEFAULT '',
+        cost_usd REAL NOT NULL DEFAULT 0,
+        PRIMARY KEY (agent, dedup_key)
+    );
+    CREATE TABLE indexed_files (
+        path TEXT PRIMARY KEY, agent TEXT NOT NULL,
+        session_id TEXT NOT NULL DEFAULT '', size INTEGER NOT NULL DEFAULT 0,
+        mtime_ns INTEGER NOT NULL DEFAULT 0, byte_offset INTEGER NOT NULL DEFAULT 0,
+        model TEXT NOT NULL DEFAULT '', cwd TEXT NOT NULL DEFAULT '',
+        label TEXT NOT NULL DEFAULT '', scanned_ms INTEGER NOT NULL DEFAULT 0
+    );
+    """
+    with sqlite3.connect(db) as conn:
+        conn.executescript(old_cli_turns)
+        conn.execute(
+            "INSERT INTO cli_turns "
+            "(agent, dedup_key, path, session_id, ts_ms, model, tokens_in, tokens_out) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            ("codex-cli", "legacy", "/gone", "legacy", T0, "old-model", 1, 1),
+        )
+        conn.execute("PRAGMA user_version=5")
+
+    session = "019ffba8-3748-7652-bf9d-f3b54697b10a"
+    _write(_codex_path(tmp_path, session), [*_codex_prelude(session), _codex_token_line()])
+
+    monkeypatch.setattr(
+        "jarvis.costs.cli_usage_index._account_id_for_root",
+        lambda agent, root: "codex:default",
+    )
+    refresh(data_dir=data, home=tmp_path)
+
+    with sqlite3.connect(db) as conn:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(cli_turns)")}
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+    assert "account_id" in cols
+    assert version == 6
+
+    turns = _all(data)
+    assert any(turn.account_id == "codex:default" for turn in turns)
+    assert any(turn.model == "old-model" for turn in turns)
+
+def test_cli_index_assigns_and_persists_account_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = tmp_path / "data"
+    home = tmp_path / "home"
+    _write(_claude_path(home), [_claude_line(uuid="u1", msg_id="msg_a")])
+
+    monkeypatch.setattr(
+        "jarvis.costs.cli_usage_index._account_id_for_root",
+        lambda agent, root: "claude:work",
+    )
+    refresh(data_dir=data, home=home)
+
+    (turn,) = _all(data)
+    assert turn.account_id == "claude:work"
+
+    from jarvis.costs.cli_usage_index import index_db_path
+    with sqlite3.connect(index_db_path(data)) as conn:
+        row = conn.execute("SELECT account_id FROM cli_turns").fetchone()
+    assert row == ("claude:work",)
+
+
+def test_cli_index_updates_account_id_when_root_owner_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = tmp_path / "data"
+    home = tmp_path / "home"
+    _write(_claude_path(home), [_claude_line(uuid="u1", msg_id="msg_a")])
+
+    monkeypatch.setattr(
+        "jarvis.costs.cli_usage_index._account_id_for_root",
+        lambda agent, root: "claude:first",
+    )
+    refresh(data_dir=data, home=home)
+
+    monkeypatch.setattr(
+        "jarvis.costs.cli_usage_index._account_id_for_root",
+        lambda agent, root: "claude:second",
+    )
+    refresh(data_dir=data, home=home)
+
+    (turn,) = _all(data)
+    assert turn.account_id == "claude:second"
+    assert turn.tokens_in == 15
+
+
+def test_cli_account_root_mapping_uses_registry_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    from jarvis import agent_accounts
+    from jarvis.costs import cli_usage_index
+
+    root = tmp_path / ".claude"
+    monkeypatch.setattr(
+        agent_accounts,
+        "list_accounts",
+        lambda platform: [SimpleNamespace(id="claude:work", config_dir=root)],
+    )
+
+    assert cli_usage_index._account_id_for_root(AGENT_CLAUDE, root) == "claude:work"
+
+
+def test_cli_account_root_mapping_identifies_builtin_account(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from jarvis import agent_accounts
+    from jarvis.costs import cli_usage_index
+
+    root = tmp_path / ".claude"
+    monkeypatch.setattr(agent_accounts, "native_dir", lambda platform: root)
+    monkeypatch.setattr(
+        agent_accounts,
+        "list_accounts",
+        lambda platform: [],
+    )
+
+    assert cli_usage_index._account_id_for_root(AGENT_CLAUDE, root) == "claude:default"
 
 
 def test_an_index_built_under_an_older_rule_is_reread(tmp_path: Path) -> None:
@@ -1393,3 +1592,26 @@ def test_an_index_from_version_two_keeps_its_rows_and_gains_the_column(tmp_path:
 
     turns = _all(data)
     assert len(turns) == 1 and turns[0].cost_usd == 0.0
+
+
+def test_glm_transcript_root_is_indexed_separately_from_claude(tmp_path: Path) -> None:
+    """GLM borrows Claude Code but must never be priced under Claude's identity."""
+    data = tmp_path / "data"
+    _write(_claude_path(tmp_path, "claude-session"), [
+        _claude_line(uuid="u1", msg_id="msg_claude", session="claude-session", model="claude-opus-5"),
+    ])
+    glm_path = (
+        tmp_path / ".jarvis-glm-claude" / "projects" / "-work-personal-jarvis" / "glm-session.jsonl"
+    )
+    _write(glm_path, [
+        _claude_line(uuid="u2", msg_id="msg_glm", session="glm-session", model="glm-4.6"),
+    ])
+
+    result = refresh(data_dir=data, home=tmp_path)
+
+    assert result.turns_added == 2
+    turns = _all(data)
+    by_agent = {turn.agent: turn for turn in turns}
+    assert by_agent[AGENT_CLAUDE].model == "claude-opus-5"
+    assert by_agent[AGENT_GLM].model == "glm-4.6"
+    assert by_agent[AGENT_GLM].session_id == "glm-session"

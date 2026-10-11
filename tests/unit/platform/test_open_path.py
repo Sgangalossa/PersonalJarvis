@@ -36,7 +36,19 @@ def test_open_file_linux_uses_xdg_open():
          patch.object(op.subprocess, "Popen") as popen:
         assert op.open_file(Path("/x/y.md")) is True
         argv = popen.call_args.args[0]
-        assert argv[0] == "xdg-open" and argv[1] == "/x/y.md"
+        assert argv[0] == "xdg-open"
+        assert argv[1] == Path(op.os.path.abspath("/x/y.md")).as_posix()
+
+
+def test_open_file_linux_makes_option_like_relative_path_absolute():
+    with patch.object(op, "detect_capabilities", return_value=_caps()), \
+         patch.object(op, "detect_platform", return_value="linux"), \
+         patch.object(op.subprocess, "Popen") as popen:
+        assert op.open_file(Path("--help")) is True
+        argv = popen.call_args.args[0]
+        assert argv[0] == "xdg-open"
+        assert argv[1] == Path(op.os.path.abspath("--help")).as_posix()
+        assert not argv[1].startswith("-")
 
 
 def test_open_file_darwin_uses_open():
@@ -68,7 +80,20 @@ def test_reveal_linux_opens_parent_dir():
          patch.object(op.subprocess, "Popen") as popen:
         assert op.reveal_in_folder(Path("/x/y/z.md")) is True
         argv = popen.call_args.args[0]
-        assert argv[0] == "xdg-open" and argv[1] == "/x/y"
+        expected_parent = Path(op.os.path.abspath("/x/y/z.md")).parent.as_posix()
+        assert argv[0] == "xdg-open" and argv[1] == expected_parent
+        assert popen.call_args.kwargs["shell"] is False
+
+
+def test_reveal_linux_makes_option_like_relative_path_absolute():
+    with patch.object(op, "detect_capabilities", return_value=_caps()), \
+         patch.object(op, "detect_platform", return_value="linux"), \
+         patch.object(op.subprocess, "Popen") as popen:
+        assert op.reveal_in_folder(Path("-rf")) is True
+        argv = popen.call_args.args[0]
+        assert argv[0] == "xdg-open"
+        assert argv[1] == Path(op.os.path.abspath("-rf")).parent.as_posix()
+        assert not argv[1].startswith("-")
 
 
 def test_reveal_windows_uses_explorer_select():
@@ -129,27 +154,29 @@ def test_open_file_with_xdg_open_linux_opens_file():
         assert argv[0] == "xdg-open" and argv[1] == "/out/report.md"
 
 
-def test_open_file_with_startfile_quotes_cmd_metacharacters(monkeypatch):
-    """A '&' in a file name must stay inside quotes, never start a second command."""
-    launched: list[object] = []
+def test_open_file_with_startfile_passes_metacharacters_as_shell_execute_argument(monkeypatch):
+    """Windows shortcut launch must not pass file names through cmd.exe."""
     monkeypatch.setattr(op, "detect_capabilities", lambda: _caps())
-    monkeypatch.setattr(op.subprocess, "Popen", lambda cmd, **kw: launched.append(cmd))
-
-    ok = op.open_file_with(
-        Path(r"C:\out\a&calc.md"), "startfile", r"C:\links\Editor.lnk"
-    )
+    with patch.object(op.os, "startfile", create=True) as startfile, \
+         patch.object(op.subprocess, "Popen") as popen:
+        ok = op.open_file_with(
+            Path(r"C:\out\a&calc.md"), "startfile", r"C:\links\Editor.lnk"
+        )
 
     assert ok is True
-    assert launched == [r'cmd /c start "" "C:\links\Editor.lnk" "C:\out\a&calc.md"']
+    startfile.assert_called_once_with(
+        r"C:\links\Editor.lnk", "open", arguments='"C:\\out\\a&calc.md"'
+    )
+    popen.assert_not_called()
 
 
 def test_open_file_with_startfile_refuses_a_quote(monkeypatch):
-    launched: list[object] = []
     monkeypatch.setattr(op, "detect_capabilities", lambda: _caps())
-    monkeypatch.setattr(op.subprocess, "Popen", lambda cmd, **kw: launched.append(cmd))
-
-    assert op.open_file_with(Path('/x/a" & calc "b.md'), "startfile", "app") is False
-    assert launched == []
+    with patch.object(op.os, "startfile", create=True) as startfile, \
+         patch.object(op.subprocess, "Popen") as popen:
+        assert op.open_file_with(Path('/x/a" & calc "b.md'), "startfile", "app") is False
+    startfile.assert_not_called()
+    popen.assert_not_called()
 
 
 def test_open_file_with_headless_is_noop():
@@ -190,6 +217,32 @@ def test_open_url_linux_uses_xdg_open():
         assert argv[0] == "xdg-open"
         assert argv[1].startswith("https://accounts.google.com")
         popen.assert_not_called()  # no double-open when xdg-open succeeds
+
+
+def test_open_url_does_not_log_url_query_parameters(caplog):
+    secret_url = "https://accounts.google.com/oauth?state=private-state-token&code=private-code"
+    with patch.object(op, "detect_capabilities", return_value=_caps()), \
+         patch.object(op, "detect_platform", return_value="linux"), \
+         patch.object(op.subprocess, "run", return_value=_ok()):
+        assert op.open_url(secret_url) is True
+
+    assert "private-state-token" not in caplog.text
+    assert "private-code" not in caplog.text
+    assert secret_url not in caplog.text
+
+
+def test_open_url_opener_timeout_does_not_log_url(caplog):
+    secret_url = "https://accounts.google.com/oauth?state=private-state-token&code=private-code"
+    timeout = op.subprocess.TimeoutExpired(cmd=["xdg-open", secret_url], timeout=8)
+    with patch.object(op, "detect_capabilities", return_value=_caps()), \
+         patch.object(op, "detect_platform", return_value="linux"), \
+         patch.object(op.subprocess, "run", side_effect=timeout), \
+         patch.object(op.shutil, "which", return_value=None):
+        assert op.open_url(secret_url) is False
+
+    assert "private-state-token" not in caplog.text
+    assert "private-code" not in caplog.text
+    assert secret_url not in caplog.text
 
 
 def test_open_url_linux_falls_back_to_browser_bin_when_xdg_open_fails():

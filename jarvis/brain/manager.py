@@ -958,7 +958,7 @@ _DETERMINISTIC_WRITE_TOOL_NAMES: frozenset[str] = frozenset({
     # sat here since introduction, so the signalless gate never actually
     # stripped update_profile (found in the 2026-07-06 pipeline audit).
     "contact-upsert", "update_profile", "wiki-ingest", "google_calendar",
-    "call-contact",
+    "call-contact", "schedule-task",
 })
 
 # Tools withheld on a turn that carries a CAPTURED SCREEN image. Screen pixels
@@ -2802,6 +2802,12 @@ class BrainManager:
         # no effect on the dispatch path.
         self._cost_meter = cost_meter
         self._curator = curator
+        # Frontier auto-apply is opt-in and lazy: it must not add provider
+        # round-trips to process boot, and concurrent first turns must share one
+        # resolver pass. A completed attempt is remembered for this manager
+        # instance, including a no-op/failure with cache fallback.
+        self._frontier_auto_apply_lock = asyncio.Lock()
+        self._frontier_auto_apply_done = False
         self._vision_provider = None
         # Drag-drop: ad-hoc images attached to ONE upcoming turn, keyed by that
         # turn's trace_id (see jarvis/brain/drop_context.py). Popped + cleared in
@@ -3121,7 +3127,13 @@ class BrainManager:
             resolved_fallback = _resolve_tier_model(
                 tier, tier_cfg.fallback_provider, tier_cfg.fallback_model
             )
-            configured_fallbacks.append((tier_cfg.fallback_provider, resolved_fallback))
+            # Keep only an explicit user pin here. A value produced solely by
+            # the static tier default becomes stale when frontier_auto_apply
+            # refreshes the provider config after manager construction; the
+            # runtime chain will then read the provider's current model.
+            configured_fallbacks.append(
+                (tier_cfg.fallback_provider, tier_cfg.fallback_model or None)
+            )
         # BUG-LATENCY (2026-05-24): only mutate the fallback provider's `model`
         # when it is a DIFFERENT provider than the primary. When primary ==
         # fallback (e.g. [brain.router] provider="gemini" + fallback_provider=
@@ -3134,18 +3146,22 @@ class BrainManager:
             tier_cfg.fallback_provider
             and tier_cfg.fallback_provider != effective_provider
             and tier_cfg.fallback_provider in (local_config.brain.providers or {})
+            and tier_cfg.fallback_model
         ):
-            resolved_fallback = _resolve_tier_model(
-                tier, tier_cfg.fallback_provider, tier_cfg.fallback_model
+            # Only an explicit fallback_model is a user pin. With no pin, leave
+            # the provider's own model untouched so a live picker/frontier refresh
+            # remains authoritative at turn-build time.
+            local_config.brain.providers[tier_cfg.fallback_provider].model = (
+                tier_cfg.fallback_model
             )
-            if resolved_fallback:
-                local_config.brain.providers[tier_cfg.fallback_provider].model = resolved_fallback
 
         if tier_cfg.fallback_provider_2:
             resolved_fallback_2 = _resolve_tier_model(
                 tier, tier_cfg.fallback_provider_2, tier_cfg.fallback_model_2
             )
-            configured_fallbacks.append((tier_cfg.fallback_provider_2, resolved_fallback_2))
+            configured_fallbacks.append(
+                (tier_cfg.fallback_provider_2, tier_cfg.fallback_model_2 or None)
+            )
             if (
                 resolved_fallback_2
                 and tier_cfg.fallback_provider_2 != effective_provider
@@ -3192,16 +3208,13 @@ class BrainManager:
                 # (open-source AP-22).
                 if _keyless_provider_is_rescued_by_oauth(provider_name):
                     log.info(
-                        "Pre-boot key check: '%s' has no API key but a login / "
-                        "Cloud project credential -> kept active.",
-                        provider_name,
+                        "Pre-boot key check: provider has no API key but a login / "
+                        "Cloud project credential -> kept active."
                     )
                     continue
                 manager._dead_providers.add(provider_name)
                 log.info(
-                    "Pre-boot key check: no key in %s -> provider '%s' disabled.",
-                    provider_to_slots.get(provider_name, [provider_name]),
-                    provider_name,
+                    "Pre-boot key check: missing credential; provider disabled."
                 )
         return manager
 
@@ -10850,6 +10863,40 @@ class BrainManager:
     # Generate — Haupt-Entrypoint
     # ------------------------------------------------------------------
 
+    async def _maybe_apply_frontier_auto_switch(self) -> None:
+        """Apply the opt-in frontier refresh once before the first real turn."""
+        brain_cfg = getattr(self._config, "brain", None)
+        if not bool(getattr(brain_cfg, "frontier_auto_apply", False)):
+            return
+        if self._frontier_auto_apply_done:
+            return
+        # An explicit per-turn model/provider override is already the user's
+        # deliberate choice. Do not mutate the shared config underneath it.
+        if _TURN_OVERRIDE.get() is not None:
+            return
+        async with self._frontier_auto_apply_lock:
+            if self._frontier_auto_apply_done:
+                return
+            try:
+                from jarvis.brain.frontier_autoswitch import apply_frontier_resolution
+                from jarvis.brain.frontier_resolver import FrontierResolver
+
+                switches = await apply_frontier_resolution(
+                    self._config,
+                    FrontierResolver(),
+                    self._bus,
+                )
+                if switches:
+                    log.info(
+                        "Frontier auto-refresh applied %d model switch(es) before first turn",
+                        len(switches),
+                    )
+            except Exception:  # noqa: BLE001 - frontier refresh must never block a turn
+                log.warning("Frontier auto-refresh failed; keeping configured models", exc_info=True)
+            finally:
+                self._frontier_auto_apply_done = True
+
+
     async def generate(
         self,
         user_text: str,
@@ -10959,6 +11006,11 @@ class BrainManager:
         # fallback loop (wiki-delta base) does not carry a stale provider name.
         self._active_turn_identity = None
         turn_trace_id = trace_id or uuid4()
+
+        # Frontier refresh is deliberately on the first real turn, not process
+        # boot: providers may need network access, and the user chose this
+        # behavior explicitly with frontier_auto_apply.
+        await self._maybe_apply_frontier_auto_switch()
 
         # Tool-surface self-heal (live 2026-07-13): a source that connects
         # AFTER the boot's last BrainToolsChanged — or whose event is lost to a
@@ -11741,12 +11793,7 @@ class BrainManager:
             # — never read setup hints or provider names aloud (AP-11/ADR-0010).
             if self._dead_providers:
                 log.warning(
-                    "Provider chain empty (all dead/keyless) — spoken fallback. "
-                    "Diagnostic: %s",
-                    _format_provider_chain_error([
-                        (p, "", "missing_key", "no API key in this session")
-                        for p in self._dead_providers
-                    ]),
+                    "Provider chain empty (all dead/keyless) — spoken fallback."
                 )
             else:
                 log.warning("No brain providers available — spoken fallback used.")
@@ -13350,17 +13397,11 @@ class BrainManager:
             previous_active = self._active_name
             try:
                 await self.switch(provider, persist=True)
-                log.info(
-                    "Fresh-install heal: active brain %r had no usable "
-                    "credential; promoted just-keyed provider %r to active and "
-                    "persisted brain.primary.",
-                    previous_active, provider,
-                )
+                log.info("Fresh-install heal: activated the newly configured provider")
             except Exception:  # noqa: BLE001 — a subscriber must never kill the bus (AP-18)
-                log.warning(
-                    "auto-activate on key-set failed for provider %r",
-                    provider, exc_info=True,
-                )
+                # SecretConfigured-derived provider data and exception metadata
+                # stay out of diagnostics; the bus must still fail closed.
+                log.warning("auto-activate on key-set failed")
 
         target_bus.subscribe(SecretConfigured, _on_secret_configured)
 
@@ -14111,8 +14152,9 @@ def _keyless_provider_is_rescued_by_oauth(provider_name: str) -> bool:
         from jarvis.brain.app_control import _keyless_credential_present
 
         return bool(_keyless_credential_present(provider_name))
-    except Exception as exc:  # noqa: BLE001 — a failed probe is not a credential
-        log.debug("Keyless-credential rescue probe failed for %s: %s", provider_name, exc)
+    except Exception:  # noqa: BLE001 — a failed probe is not a credential
+        # Provider identity and exception metadata may be secret-tainted.
+        log.debug("Keyless-credential rescue probe failed")
         return False
 
 

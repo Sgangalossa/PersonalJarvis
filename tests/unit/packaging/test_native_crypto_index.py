@@ -24,7 +24,7 @@ def spec(monkeypatch):
                 "target": target,
                 "filename": filename,
                 "sha256": "a" * 64,
-                "url": f"{index.PUBLISH_ROOT}/50.0.2-1/files/{filename}",
+                "url": f"{index.PUBLISH_ROOT}/{index.publication_id(manifest)}/files/{filename}",
             }
         )
     monkeypatch.setattr(index, "load_manifest", lambda: manifest)
@@ -74,6 +74,14 @@ def test_macho_binary_cannot_silently_raise_the_macos_floor():
         index.validate_macho(header + struct.pack("<6I", 0x32, 24, 1, 15 << 16, 15 << 16, 0))
     with pytest.raises(ValueError, match="extent"):
         index.validate_macho(header)
+
+
+def test_fork_reuses_the_reviewed_upstream_publication():
+    assert index.PUBLISH_ROOT == "https://personaljarvis.github.io/PersonalJarvis/native-crypto"
+    manifest = index.load_manifest()
+    assert manifest["build_run"].startswith(
+        "https://github.com/PersonalJarvis/PersonalJarvis/actions/runs/"
+    )
 
 
 def test_uv_source_is_explicit_and_matches_the_reviewed_publication():

@@ -21,6 +21,26 @@ from jarvis.ui.web import provider_routes
 from jarvis.ui.web.provider_routes import router
 
 
+# Snapshot the catalog at collection time. The Windows full-suite runner loads
+# provider tests in one process, and tests that deliberately rebuild the
+# provider registry must not make this route suite order-dependent.
+_TEST_SPECS = {
+    provider_id: provider_routes.get_spec(provider_id)
+    for provider_id in (
+        "openai",
+        "openai-live",
+        "gemini-live",
+        "vertex-live",
+        "local-realtime",
+    )
+}
+
+
+@pytest.fixture(autouse=True)
+def _stable_provider_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(provider_routes, "get_spec", _TEST_SPECS.get)
+
+
 def _app() -> FastAPI:
     app = FastAPI()
     app.include_router(router)
@@ -60,13 +80,13 @@ def test_non_realtime_tier_is_400() -> None:
 
 
 def test_missing_voice_is_400() -> None:
-    response = _preview(TestClient(_app()), "openai-realtime", voice="")
+    response = _preview(TestClient(_app()), "openai-live", voice="")
     assert response.status_code == 400
 
 
 def test_uncatalogued_voice_is_422() -> None:
     response = _preview(
-        TestClient(_app()), "openai-realtime", voice="not-a-voice"
+        TestClient(_app()), "openai-live", voice="not-a-voice"
     )
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "unsupported_realtime_voice"
@@ -75,7 +95,7 @@ def test_uncatalogued_voice_is_422() -> None:
 def test_uncatalogued_model_is_422() -> None:
     response = _preview(
         TestClient(_app()),
-        "openai-realtime",
+        "openai-live",
         voice="alloy",
         model="not-a-model",
     )
@@ -85,7 +105,7 @@ def test_uncatalogued_model_is_422() -> None:
 
 def test_missing_credential_is_409(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cfg_mod, "get_provider_secret", lambda _pid: None)
-    response = _preview(TestClient(_app()), "openai-realtime", voice="alloy")
+    response = _preview(TestClient(_app()), "openai-live", voice="alloy")
     assert response.status_code == 409
     assert "credentials" in response.json()["detail"]
 
@@ -194,10 +214,10 @@ def test_sampler_failure_is_clean_502(monkeypatch: pytest.MonkeyPatch) -> None:
         raise RuntimeError("quota exhausted")
 
     monkeypatch.setitem(
-        provider_routes._REALTIME_PREVIEW_SAMPLERS, "openai-realtime", sampler
+        provider_routes._REALTIME_PREVIEW_SAMPLERS, "openai-live", sampler
     )
 
-    response = _preview(TestClient(_app()), "openai-realtime", voice="marin")
+    response = _preview(TestClient(_app()), "openai-live", voice="marin")
     assert response.status_code == 502
     assert "quota exhausted" in response.json()["detail"]
 
@@ -228,10 +248,10 @@ def test_hung_sampler_times_out_as_502(monkeypatch: pytest.MonkeyPatch) -> None:
         return b"\x00\x01", 24_000
 
     monkeypatch.setitem(
-        provider_routes._REALTIME_PREVIEW_SAMPLERS, "openai-realtime", sampler
+        provider_routes._REALTIME_PREVIEW_SAMPLERS, "openai-live", sampler
     )
 
-    response = _preview(TestClient(_app()), "openai-realtime", voice="cedar")
+    response = _preview(TestClient(_app()), "openai-live", voice="cedar")
     assert response.status_code == 502
     assert "timed out" in response.json()["detail"]
 
@@ -241,5 +261,5 @@ def test_marin_and_cedar_are_in_the_openai_catalog() -> None:
     reason the OpenAI sampler runs through a realtime session)."""
     from jarvis.brain.model_catalog import REALTIME_VOICES
 
-    ids = {option.id for option in REALTIME_VOICES["openai-realtime"]}
+    ids = {option.id for option in REALTIME_VOICES["openai-live"]}
     assert {"marin", "cedar"} <= ids

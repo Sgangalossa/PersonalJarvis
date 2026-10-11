@@ -212,6 +212,55 @@ def test_provider_error_is_reported_not_raised(tmp_path: Path, monkeypatch: pyte
     asyncio.run(scenario())
 
 
+def test_post_notice_once_publishes_the_single_persisted_event(tmp_path: Path, scripted) -> None:
+    async def scenario() -> None:
+        svc = AgentChatService(AgentChatStore(":memory:"))
+        session = svc.create_session(provider="fakeprov", cwd=str(tmp_path), surface="jarvis")
+        queue = svc.subscribe(session.session_id)
+        payload = {"kind": "society_room_result", "room_open_id": "open-2", "settle_event_id": "settle-2"}
+
+        assert await svc.post_notice_once(session.session_id, payload, dedupe_key="society_room_result:open-2")
+        assert not await svc.post_notice_once(session.session_id, payload, dedupe_key="society_room_result:open-2")
+        event = await asyncio.wait_for(queue.get(), timeout=1)
+        assert event["kind"] == "notice"
+        assert event["payload"]["settle_event_id"] == "settle-2"
+        assert len([e for e in svc.store.list_events(session.session_id) if e["kind"] == "notice"]) == 1
+
+    asyncio.run(scenario())
+
+
+def test_post_notice_once_is_atomic_across_store_connections(tmp_path: Path) -> None:
+    db = tmp_path / "chat.sqlite"
+    first = AgentChatStore(db)
+    session = first.create_session(provider="openai", model="", effort="medium", cwd=str(tmp_path), surface="jarvis")
+    second = AgentChatStore(db)
+    payload = {"kind": "society_room_result", "room_open_id": "open-1", "settle_event_id": "settle-1"}
+
+    async def scenario() -> None:
+        results = await asyncio.gather(
+            asyncio.to_thread(
+                first.append_notice_once,
+                session.session_id,
+                payload,
+                dedupe_key="society_room_result:open-1",
+            ),
+            asyncio.to_thread(
+                second.append_notice_once,
+                session.session_id,
+                payload,
+                dedupe_key="society_room_result:open-1",
+            ),
+        )
+        assert sum(result is not None for result in results) == 1
+        notices = [e for e in first.list_events(session.session_id) if e["kind"] == "notice"]
+        assert len(notices) == 1
+        assert notices[0]["payload"] == payload | {"_dedupe_key": "society_room_result:open-1"}
+
+    asyncio.run(scenario())
+    first.close()
+    second.close()
+
+
 # ------------------------------------------------------------------ routes
 
 
@@ -689,3 +738,70 @@ def test_allow_always_on_a_kit_that_handles_it_does_not_flip_the_mode(
         assert remembered == [(session.session_id, "RunCommand", {"command": "echo x"})]
 
     asyncio.run(scenario())
+
+
+async def test_receive_message_dedupes_across_store_connections(tmp_path):
+    db = tmp_path / "chat.db"
+    first = AgentChatStore(db)
+    second = AgentChatStore(db)
+    svc_a = AgentChatService(first, assistant_name=lambda: "Test")
+    svc_b = AgentChatService(second, assistant_name=lambda: "Test")
+    session = svc_a.create_session(provider="openai")
+    q = svc_a.subscribe(session.session_id)
+    from jarvis.society.delivery import IncomingMessage
+
+    incoming = IncomingMessage(
+        message_id="society-cross-connection-1",
+        sender_id="scout",
+        sender_name="Scout",
+        sender_kind="agent",
+        text="ping",
+        prompt="[say from Scout] ping",
+        trace_id="trace-cross-1",
+    )
+    results = await asyncio.gather(
+        svc_a.receive_message(session.session_id, incoming),
+        svc_b.receive_message(session.session_id, incoming),
+    )
+    assert results[0]["message_id"] == results[1]["message_id"] == incoming.message_id
+    events = first.list_events(session.session_id)
+    assert [event["kind"] for event in events] == ["agent_message"]
+    assert first.get_session(session.session_id).message_count == 1  # type: ignore[union-attr]
+    assert q.qsize() == 1
+    assert q.get_nowait()["payload"]["message_id"] == incoming.message_id
+    with pytest.raises(asyncio.QueueEmpty):
+        q.get_nowait()
+
+
+async def test_receive_message_dedupes_concurrent_delivery_and_publishes_once():
+    store = AgentChatStore(":memory:")
+    svc = AgentChatService(store, assistant_name=lambda: "Test")
+    session = svc.create_session(provider="openai")
+    q = svc.subscribe(session.session_id)
+    from jarvis.society.delivery import IncomingMessage
+
+    incoming = IncomingMessage(
+        message_id="society-event-1",
+        sender_id="scout",
+        sender_name="Scout",
+        sender_kind="agent",
+        text="ping",
+        prompt="[say from Scout] ping",
+        trace_id="trace-1",
+    )
+    results = await asyncio.gather(
+        svc.receive_message(session.session_id, incoming),
+        svc.receive_message(session.session_id, incoming),
+    )
+    assert results[0]["message_id"] == results[1]["message_id"] == incoming.message_id
+    events = [store_event for store_event in store.list_events(session.session_id)]
+    assert [event["kind"] for event in events] == ["agent_message"]
+    persisted = store.get_session(session.session_id)
+    assert persisted is not None
+    assert persisted.message_count == 1
+    assert persisted.preview == "ping"
+    published = [q.get_nowait(),]
+    assert published[0]["kind"] == "agent_message"
+    with pytest.raises(asyncio.QueueEmpty):
+        q.get_nowait()
+

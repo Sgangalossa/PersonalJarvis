@@ -365,7 +365,9 @@ class TaskScheduler:
             current = await self._store.get(tid)
             if current is None or current["state"] != "scheduled":
                 return
-            await self._store.hooks.mark(tid, delivery, "running")
+            claimed = await self._store.hooks.claim_running(tid, delivery)
+            if not claimed:
+                return
             await self._store.append_step(
                 tid, "log", {"event": "hook_started", "delivery_id": delivery}
             )
@@ -394,7 +396,7 @@ class TaskScheduler:
                     and current is not None
                     and current["state"] == "scheduled"
                 ):
-                    await self._store.update_state(tid, "completed")
+                    await self._store.update_state(tid, "completed", expected_state="scheduled")
         except RoutineDeferred:  # Keep the hook pending and retry after a short delay.
             await self._store.hooks.mark(tid, delivery, "pending")
             self._hook_retry_at[tid] = time.monotonic() + 2
@@ -440,6 +442,11 @@ class TaskScheduler:
         if spec.trigger.type in ("after_delay", "at_time"):
             self._remove_from_memory(task_id)
         restore_state = "paused" if state == "paused" else None
+        if restore_state is not None:
+            if not await self._store.update_state(
+                task_id, "scheduled", expected_state="paused"
+            ):
+                raise TaskStateConflict("task changed before run-now could start")
         await self._store.append_step(task_id, "log", {"event": "run_now"})
         task_obj = asyncio.create_task(
             self._run_now_and_settle(task_id, restore_state),
@@ -460,8 +467,14 @@ class TaskScheduler:
         # a manual run must not silently switch a paused automation back on.
         try:
             task = await self._store.get(task_id)
-            if task is not None and task["state"] not in ("running", "cancelled"):
-                await self._store.update_state(task_id, restore_state)  # type: ignore[arg-type]
+            if task is not None and task["state"] == "scheduled":
+                if await self._store.update_state(
+                    task_id, restore_state, expected_state="scheduled"
+                ):
+                    # A paused task must stay absent from every in-memory
+                    # dispatch structure after its one-off manual run.  The
+                    # recurring runner may have re-armed it while settling.
+                    self._remove_from_memory(task_id)
         except Exception:  # noqa: BLE001
             log.exception("run_now: could not restore state=%s for task=%s", restore_state, task_id)
 
@@ -486,8 +499,11 @@ class TaskScheduler:
             raise TaskStateConflict("task is running — wait for it to finish")
         if state in TERMINAL_STATES:
             raise TaskStateConflict(f"task is already final (state={state})")
+        if not await self._store.update_state(
+            task_id, "paused", expected_state=state
+        ):
+            raise TaskStateConflict("task changed before pause could be applied")
         self._remove_from_memory(task_id)
-        await self._store.update_state(task_id, "paused")
         await self._store.append_step(task_id, "log", {"event": "paused"})
         self._wakeup.set()
 
@@ -532,7 +548,10 @@ class TaskScheduler:
         if spec.trigger.type in ("every", "calendar", "cron"):
             due = next_every_due_ns(spec, now)
             await self._store.set_next_due(task_id, due)
-        await self._store.update_state(task_id, "scheduled")
+        if not await self._store.update_state(
+            task_id, "scheduled", expected_state="paused"
+        ):
+            raise TaskStateConflict("task changed before resume could be applied")
         await self._store.append_step(task_id, "log", {"event": "resumed"})
         self._register_in_memory(spec, task_id, stored_due_at_ns=due)
         if notify_activation:
@@ -571,10 +590,15 @@ class TaskScheduler:
         running_token = self._running_tokens.get(task_id)
         if running_token is not None:
             running_token.cancel(reason)
+        expected_state = task["state"]
+        if not await self._store.update_state(
+            task_id, "cancelled", error=reason, expected_state=expected_state
+        ):
+            return False
         # Linear scan over the heap — small enough, a typical queue is < 100.
+        # Remove only after the CAS succeeds, otherwise a losing cancellation
+        # race could silently unschedule a task that is already running again.
         self._remove_from_memory(task_id)
-
-        await self._store.update_state(task_id, "cancelled", error=reason)
         await self._store.append_step(task_id, "log", {"event": "cancelled", "reason": reason})
         # Event on the bus
         from jarvis.core.events import TaskCancelled
@@ -641,8 +665,12 @@ class TaskScheduler:
             # subject (e.g. one mission's terminal event). Skips WITHOUT touching
             # the max_firings counter, so a re-published event cannot drain it.
             dedup_key = _dedup_key(tid, event)
+            subject = dedup_key[1] if dedup_key is not None else None
             if dedup_key is not None:
                 if dedup_key in self._fired_dedup:
+                    continue
+                if await self._store.event_fired_for_subject(tid, subject):
+                    self._fired_dedup[dedup_key] = None
                     continue
                 self._fired_dedup[dedup_key] = None
                 self._trim_dedup()
@@ -656,17 +684,19 @@ class TaskScheduler:
                     self._firings_left.pop(tid, None)
                     continue
                 self._firings_left[tid] = left - 1
-            await self._store.append_step(tid, "log", {"event": "event_fired"})
+            payload = {"event": "event_fired"}
+            if subject is not None:
+                payload["subject"] = subject
+            await self._store.append_step(tid, "log", payload)
             await self._dispatch_runner(tid, trigger_event=event_ctx)
             # If that was the last fire: clean up.
             if left is not None and left - 1 <= 0:
                 task_ids.discard(tid)
                 self._firings_left.pop(tid, None)
                 self._known.discard(tid)
-                try:
-                    await self._store.update_state(tid, "completed")
-                except Exception:  # noqa: BLE001
-                    log.exception("max_firings cleanup: update_state failed for task_id=%s", tid)
+                # TaskRunner owns the running -> completed transition after
+                # the final action finishes. Completing here races its
+                # scheduled -> running claim and can suppress the last firing.
 
     # ------------------------------------------------------------------
     # Hydration

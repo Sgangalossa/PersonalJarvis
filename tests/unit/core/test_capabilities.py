@@ -317,6 +317,15 @@ class TestSeedRegistry:
         seed_ids = {c.id for c in _SEED_CAPABILITIES}
         assert seed_ids.issubset(ids)
 
+    def test_reminder_scheduler_capability_is_registered(self) -> None:
+        ids = {c.id for c in self.reg.all()}
+        assert "tool.schedule-task" in ids
+
+    def test_reminder_request_resolves_to_scheduler(self) -> None:
+        result = self.reg.resolve_intent("Ricordami di chiamare Anna domani")  # i18n-allow
+        assert result is not None
+        assert result.id == "tool.schedule-task"
+
     def test_router_tools_present(self) -> None:
         ids = {c.id for c in self.reg.all()}
         for tool in (
@@ -407,6 +416,7 @@ class TestSeedRegistry:
             "tool.spawn-worker",
             "tool.run-skill",
             "tool.wiki-ingest",
+            "tool.schedule-task",
         }
         caps_by_id = {c.id: c for c in self.reg.all()}
         for cap_id in action_ids:
@@ -458,6 +468,11 @@ class TestSeedRegistry:
         assert self.reg.has_action_intent(
             "wie ist das Wetter?"  # i18n-allow
         ) is False
+
+    def test_has_action_intent_recognizes_reminder_requests(self) -> None:
+        assert self.reg.has_action_intent("remind me in two hours") is True
+        assert self.reg.has_action_intent("Erinnere mich morgen um 9 Uhr") is True  # i18n-allow
+        assert self.reg.has_action_intent("Ricordami di chiamare Anna") is True
 
     def test_has_action_intent_deverbal_noun_is_not_a_command(self) -> None:
         """Determiner-led deverbal nouns ('eine ganz generelle Frage', 'die  # i18n-allow: bug quote

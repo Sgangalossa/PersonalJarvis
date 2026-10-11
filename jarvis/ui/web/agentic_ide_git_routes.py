@@ -119,7 +119,7 @@ def github_repositories(refresh: bool = Query(False)) -> dict:
             "source": cred.source,
             "login": "",
             "repos": [],
-            "reason": str(exc),
+            "reason": "GitHub repository lookup failed. Check the application log for details.",
         }
     return {
         "connected": True,
