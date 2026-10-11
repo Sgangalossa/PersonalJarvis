@@ -517,10 +517,26 @@ jobs:
           python -m pip install pytest pytest-asyncio hypothesis
           python -m pytest tests/unit/cli_ctl/ -q -p no:cacheprovider
 
-  deps:
-    name: deps-sync + portable install matrix
+  native-crypto-publication:
+    name: native crypto publication
     needs: detect
     if: needs.detect.outputs.deps == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Verify the public index and reviewed native wheels
+        run: python scripts/ci/check_native_crypto_publication.py
+
+  deps:
+    name: deps-sync + portable install matrix
+    needs: [detect, native-crypto-publication]
+    if: ${{ !cancelled() && needs.detect.outputs.deps == 'true' && needs.native-crypto-publication.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -540,16 +556,14 @@ jobs:
 
   native-crypto-runtime:
     name: native crypto (${{ matrix.runner }}, Python ${{ matrix.python }})
-    needs: detect
-    if: needs.detect.outputs.deps == 'true'
+    needs: [detect, native-crypto-publication]
+    if: ${{ !cancelled() && needs.detect.outputs.deps == 'true' && needs.native-crypto-publication.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - {runner: macos-15-intel, architecture: x64, python: '3.11'}
           - {runner: macos-15-intel, architecture: x64, python: '3.14'}
-          - {runner: macos-15, architecture: arm64, python: '3.11'}
-          - {runner: macos-15, architecture: arm64, python: '3.14'}
           - {runner: windows-11-arm, architecture: arm64, python: '3.12'}
           - {runner: windows-11-arm, architecture: arm64, python: '3.14'}
     runs-on: ${{ matrix.runner }}
@@ -580,6 +594,32 @@ jobs:
           actual = backend.openssl_version_text()
           print(actual)
           assert actual.startswith(f'OpenSSL {expected} '), (actual, expected)
+
+  native-crypto-standard-runtime:
+    name: native crypto standard (macos-15, Python ${{ matrix.python }})
+    needs: detect
+    if: needs.detect.outputs.deps == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.14']
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+          architecture: arm64
+      - name: Fresh hashed base install without crypto compilation
+        run: python scripts/pip_install.py --require-hashes --only-binary=cryptography,asyncssh -r requirements.txt
+      - name: Native security and compatibility contracts
+        shell: bash
+        run: |
+          python -m pip install pytest pytest-asyncio pytest-timeout
+          python -m pytest --confcutdir=tests/contract -q tests/contract/test_native_crypto.py tests/contract/test_native_ssh.py
 
   realtime-contract:
     needs: detect
@@ -794,8 +834,10 @@ jobs:
       - test-report
       - frontend
       - jarvisctl
+      - native-crypto-publication
       - deps
       - native-crypto-runtime
+      - native-crypto-standard-runtime
       - realtime-contract
       - realtime-slim
       - soak
