@@ -98,6 +98,8 @@ class WebServer:
     def __init__(self, cfg: JarvisConfig, bus: EventBus | None = None) -> None:
         self.cfg = cfg
         self._browser_prepare_task: asyncio.Task[None] | None = None
+        self._cli_bootstrap_task: asyncio.Task[None] | None = None
+        self._plugin_bootstrap_task: asyncio.Task[None] | None = None
         # Deferred boot work belongs to this server instance. Explicit handles
         # let stop() drain it before pytest/asyncio tears the event loop down.
         self._anyio_pool_warm_task: asyncio.Task[None] | None = None
@@ -2818,7 +2820,9 @@ class WebServer:
                         "CliToolRegistry bootstrap failed — CLIs view empty"
                     )
 
-            asyncio.create_task(_bootstrap_clis(), name="cli-registry-bootstrap")
+            self._cli_bootstrap_task = asyncio.create_task(
+                _bootstrap_clis(), name="cli-registry-bootstrap"
+            )
 
         # Bootstrap the plugin registry asynchronously — opens an in-process
         # MCPClient per connected plugin and bridges its tools into the
@@ -2833,7 +2837,9 @@ class WebServer:
                         "PluginToolRegistry bootstrap failed — plugins worker-only"
                     )
 
-            asyncio.create_task(_bootstrap_plugins(), name="plugin-registry-bootstrap")
+            self._plugin_bootstrap_task = asyncio.create_task(
+                _bootstrap_plugins(), name="plugin-registry-bootstrap"
+            )
 
         # Board aggregator as a never-ending task. run_forever() does an
         # on-startup run first and then sleeps 6h (Plan §5-A Decision #2).
@@ -3855,7 +3861,12 @@ class WebServer:
         # Own and drain them here instead of leaving asyncio.run()/pytest to
         # discover them during loop teardown. Stop the deferred registry reload
         # before its registries are closed below so shutdown cannot race a scan.
-        for attr in ("_anyio_pool_warm_task", "_deferred_reload_task"):
+        for attr in (
+            "_anyio_pool_warm_task",
+            "_deferred_reload_task",
+            "_cli_bootstrap_task",
+            "_plugin_bootstrap_task",
+        ):
             task = getattr(self, attr, None)
             setattr(self, attr, None)
             if task is not None and not task.done():

@@ -62,6 +62,8 @@ async def test_webserver_starts_and_stops(test_config):
     # pytest-asyncio runner starts its own loop teardown.
     assert srv._anyio_pool_warm_task is None
     assert srv._deferred_reload_task is None
+    assert srv._cli_bootstrap_task is None
+    assert srv._plugin_bootstrap_task is None
     leaked = {
         task.get_name()
         for task in asyncio.all_tasks()
@@ -69,6 +71,8 @@ async def test_webserver_starts_and_stops(test_config):
     }
     assert "anyio-pool-warm" not in leaked
     assert "deferred-registry-reload" not in leaked
+    assert "cli-registry-bootstrap" not in leaked
+    assert "plugin-registry-bootstrap" not in leaked
 
 
 def test_rest_api_health(test_config):
