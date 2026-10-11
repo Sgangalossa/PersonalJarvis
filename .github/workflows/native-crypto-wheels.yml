@@ -10,16 +10,13 @@ on:
       - tests/contract/test_native_ssh.py
       - jarvis/computers/ssh_packet_guard.py
   workflow_dispatch:
-  push:
-    branches: [main]
 
 permissions:
   contents: read
-  actions: read
 
 concurrency:
   group: native-crypto-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -67,58 +64,3 @@ jobs:
           name: native-crypto-${{ matrix.target }}
           path: out/native-crypto/
           if-no-files-found: error
-
-  build-site:
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.13"
-      - name: Read reviewed artifact run from manifest
-        id: reviewed
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-          from urllib.parse import urlparse
-          spec = json.loads(Path("packaging/native-crypto.json").read_text(encoding="utf-8"))
-          run_id = urlparse(spec["build_run"]).path.rstrip("/").split("/")[-1]
-          if not run_id.isdigit():
-              raise SystemExit("Manifest build_run must identify a GitHub Actions run")
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write(f"run_id={run_id}\n")
-          PY
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          pattern: native-crypto-*
-          path: out/native-crypto
-          merge-multiple: true
-          run-id: ${{ steps.reviewed.outputs.run_id }}
-          github-token: ${{ github.token }}
-      - name: Build and verify the immutable native package index
-        run: python scripts/native_crypto_index.py --artifacts out/native-crypto --output site
-      - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
-        with:
-          path: site
-
-  deploy-pages:
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    needs: build-site
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy verified package index
-        id: deployment
-        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

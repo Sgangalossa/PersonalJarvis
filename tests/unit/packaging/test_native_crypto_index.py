@@ -76,6 +76,14 @@ def test_macho_binary_cannot_silently_raise_the_macos_floor():
         index.validate_macho(header)
 
 
+def test_fork_reuses_the_reviewed_upstream_publication():
+    assert index.PUBLISH_ROOT == "https://personaljarvis.github.io/PersonalJarvis/native-crypto"
+    manifest = index.load_manifest()
+    assert manifest["build_run"].startswith(
+        "https://github.com/PersonalJarvis/PersonalJarvis/actions/runs/"
+    )
+
+
 def test_uv_source_is_explicit_and_matches_the_reviewed_publication():
     config = tomllib.loads((index.ROOT / "packaging/native-crypto-uv.toml").read_text())
     assert config["index"] == [
