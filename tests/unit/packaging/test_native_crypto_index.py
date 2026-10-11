@@ -24,7 +24,7 @@ def spec(monkeypatch):
                 "target": target,
                 "filename": filename,
                 "sha256": "a" * 64,
-                "url": f"{index.PUBLISH_ROOT}/50.0.2-1/files/{filename}",
+                "url": f"{index.PUBLISH_ROOT}/{index.publication_id(manifest)}/files/{filename}",
             }
         )
     monkeypatch.setattr(index, "load_manifest", lambda: manifest)
