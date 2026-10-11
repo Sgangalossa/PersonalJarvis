@@ -70,7 +70,7 @@ class CliStatusProber:
             try:
                 proc.kill()
             except ProcessLookupError:
-                pass
+                log.debug("%s: probe child exited before kill", label)
         try:
             await asyncio.wait_for(proc.communicate(), timeout=KILL_WAIT_TIMEOUT_S)
         except TimeoutError:
@@ -79,10 +79,14 @@ class CliStatusProber:
                 "blocking shutdown.",
                 label,
             )
-        except (ProcessLookupError, RuntimeError):
+        except (ProcessLookupError, RuntimeError) as exc:
             # The process or its pipes may have completed between cancellation
             # and this drain. Either state is already terminal.
-            pass
+            log.debug(
+                "%s: probe child drain already terminal (%s)",
+                label,
+                type(exc).__name__,
+            )
 
     async def probe(self, spec: CliSpec) -> CliStatus:
         installed, version, binary_path = await self._probe_binary(spec)
@@ -193,7 +197,7 @@ class CliStatusProber:
             except asyncio.CancelledError:
                 await self._stop_process(proc, f"probe-binary({spec.name})")
                 raise
-            except TimeoutError:
+            except TimeoutError:  # _stop_process reports any failed child teardown.
                 await self._stop_process(proc, f"probe-binary({spec.name})")
                 return True, None, path
         except FileNotFoundError:
@@ -239,7 +243,7 @@ class CliStatusProber:
             except asyncio.CancelledError:
                 await self._stop_process(proc, f"probe-auth({spec.name})")
                 raise
-            except TimeoutError:
+            except TimeoutError:  # _stop_process reports any failed child teardown.
                 await self._stop_process(proc, f"probe-auth({spec.name})")
                 return "unknown"
             exit_code = proc.returncode or 0
