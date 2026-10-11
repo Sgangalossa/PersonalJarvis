@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import urllib.error
 
 import pytest
 
@@ -71,3 +72,37 @@ def test_missing_index_link_fails_before_artifact_download(monkeypatch, records)
 
     with pytest.raises(ValueError, match="windows.whl"):
         check.check_publication()
+
+
+def test_missing_pages_index_reports_exact_repository_action(monkeypatch, capsys):
+    index_url = "https://sgangalossa.github.io/PersonalJarvis/native-crypto/"
+    monkeypatch.setattr(check.index, "native_records", lambda: [])
+    monkeypatch.setattr(check.index, "wheel_links_url", lambda: index_url)
+
+    def missing_index(*_args, **_kwargs):
+        raise urllib.error.HTTPError(index_url, 404, "Not Found", {}, None)
+
+    monkeypatch.setattr(check.urllib.request, "urlopen", missing_index)
+
+    assert check.main() == 1
+    captured = capsys.readouterr()
+    assert check.PAGES_SETTINGS_URL in captured.err
+    assert "Source: GitHub Actions" in captured.err
+    assert "Native cryptography wheels on jarvis-lab" in captured.err
+    assert "complete and verified" not in captured.out
+
+
+def test_non_404_index_error_does_not_claim_pages_is_disabled(monkeypatch, capsys):
+    index_url = "https://sgangalossa.github.io/PersonalJarvis/native-crypto/"
+    monkeypatch.setattr(check.index, "native_records", lambda: [])
+    monkeypatch.setattr(check.index, "wheel_links_url", lambda: index_url)
+
+    def unavailable_index(*_args, **_kwargs):
+        raise urllib.error.HTTPError(index_url, 503, "Unavailable", {}, None)
+
+    monkeypatch.setattr(check.urllib.request, "urlopen", unavailable_index)
+
+    assert check.main() == 1
+    captured = capsys.readouterr()
+    assert "HTTP Error 503" in captured.err
+    assert check.PAGES_SETTINGS_URL not in captured.err
