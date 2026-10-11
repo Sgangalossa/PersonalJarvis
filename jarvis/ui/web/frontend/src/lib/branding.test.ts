@@ -10,12 +10,12 @@ import {
 describe("branding identity", () => {
   it("keeps the current frontend values byte-for-byte", () => {
     expect(PRODUCT_NAME).toBe("Personal Jarvis");
-    expect(OFFICIAL_REPO_SLUG).toBe("PersonalJarvis/PersonalJarvis");
+    expect(OFFICIAL_REPO_SLUG).toBe("Dodaios/Dodaios");
     expect(OFFICIAL_REPO_URL).toBe(
-      "https://github.com/PersonalJarvis/PersonalJarvis",
+      "https://github.com/Dodaios/Dodaios",
     );
     expect(OFFICIAL_REPO_LABEL).toBe(
-      "github.com/PersonalJarvis/PersonalJarvis",
+      "github.com/Dodaios/Dodaios",
     );
   });
 });
