@@ -142,6 +142,10 @@ class SocietyScheduler:
         self._dispatch_locks: dict[str, asyncio.Lock] = {}
         self._trace_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
         self._trace_admissions: dict[str, int] = {}
+        #: Claims currently crossing the non-durable dispatch→bind boundary.
+        # A persisted unbound claim is recoverable after restart, but two live
+        # callbacks must never deliver that same claim concurrently.
+        self._room_dispatching: set[str] = set()
         #: run_id → agent_id of work the scheduler started and has not seen end.
         self._running: dict[str, str] = {}
         self._unsubscribe: Callable[[], None] | None = None
@@ -304,8 +308,14 @@ class SocietyScheduler:
                 except RoomError as exc:
                     log.debug("society room %s claim lost a concurrent race: %s", room_id, exc)
                     return
+            if claim_id in self._room_dispatching:
+                return
+            self._room_dispatching.add(claim_id)
             try:
-                run_id = await dispatch(target, room, claim_id)
+                try:
+                    run_id = await dispatch(target, room, claim_id)
+                finally:
+                    self._room_dispatching.discard(claim_id)
             except DeliveryBusy:
                 if not had_claim:
                     try:

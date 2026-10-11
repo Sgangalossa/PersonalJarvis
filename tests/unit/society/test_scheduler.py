@@ -290,6 +290,45 @@ async def test_room_recovery_reuses_persisted_claim_after_scheduler_restart(tmp_
         await reopened.close()
 
 
+async def test_concurrent_room_drives_dispatch_one_durable_claim_once(tmp_path: Path):
+    """Live callbacks cannot both deliver the recovery-safe persisted claim."""
+    store = SocietyStore(tmp_path / "room-dispatch-race.db")
+    await store.open()
+    roster = Roster(store)
+    await roster.create(name="Jarvis", tier=Tier.LEAD)
+    await roster.create(name="Scout")
+    await roster.create(name="Archivist")
+    rooms = Rooms(store)
+    opened = await rooms.open(opened_by="jarvis", members=["scout", "archivist"], live=True)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls: list[str] = []
+
+    async def slow_room_turn(target, room, claim_id):
+        calls.append(claim_id)
+        started.set()
+        await release.wait()
+        return f"room:{room.room_id}:turn-1"
+
+    scheduler = SocietyScheduler(
+        store, roster, rooms=rooms, room_turn=slow_room_turn, budget_tracker=FakeBudget()
+    )
+    try:
+        first = asyncio.create_task(scheduler.drive_room(opened.room_id))
+        await started.wait()
+        second = asyncio.create_task(scheduler.drive_room(opened.room_id))
+        await asyncio.sleep(0)
+        release.set()
+        await asyncio.gather(first, second)
+
+        assert len(calls) == 1
+        loaded = await rooms.get(opened.room_id)
+        assert loaded is not None
+        assert calls == [loaded.inflight_claim_id]
+    finally:
+        await store.close()
+
+
 async def test_room_rejects_unusable_dispatch_run_id(tmp_path: Path):
     store = SocietyStore(tmp_path / "room-bad-run.db")
     await store.open()
