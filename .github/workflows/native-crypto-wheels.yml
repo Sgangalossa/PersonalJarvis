@@ -92,7 +92,7 @@ jobs:
           if not run_id.isdigit():
               raise SystemExit("Manifest build_run must identify a GitHub Actions run")
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write(f"run_id={run_id}\\n")
+              output.write(f"run_id={run_id}\n")
           PY
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
