@@ -108,22 +108,25 @@ def _write_new_json(output_path: Path, payload: dict[str, Any], *, pretty: bool)
         temporary_path.unlink(missing_ok=True)
 
 
-async def _run_assemble(
+def _json_paths(receipts_dir: Path) -> list[Path]:
+    return sorted(
+        path for path in receipts_dir.iterdir() if path.suffix.casefold() == ".json"
+    )
+
+
+async def _load_receipt_bundle(
     receipts_dir: Path,
     *,
     pretty: bool,
-    output_path: Path | None = None,
-) -> int:
+) -> tuple[int, dict[str, Any] | None]:
     try:
-        receipt_paths = sorted(
-            path for path in receipts_dir.iterdir() if path.suffix.casefold() == ".json"
-        )
+        receipt_paths = await asyncio.to_thread(_json_paths, receipts_dir)
     except OSError as exc:
         _print({"error": f"could not list receipt directory: {exc}"}, pretty=pretty)
-        return 2
+        return 2, None
     if not receipt_paths:
         _print({"error": "receipt directory contains no JSON envelopes"}, pretty=pretty)
-        return 2
+        return 2, None
 
     try:
         receipt_texts = await asyncio.gather(
@@ -138,32 +141,32 @@ async def _run_assemble(
         ]
     except (OSError, json.JSONDecodeError) as exc:
         _print({"error": f"could not read receipt envelope: {exc}"}, pretty=pretty)
-        return 2
+        return 2, None
 
     receipts: dict[str, object] = {}
     for path, envelope in envelopes:
         if not isinstance(envelope, dict):
             _print({"error": f"{path.name}: receipt envelope must be an object"}, pretty=pretty)
-            return 2
+            return 2, None
         scenario_id = envelope.get("scenario_id")
         if type(scenario_id) is not str:
             _print({"error": f"{path.name}: scenario_id must be a string"}, pretty=pretty)
-            return 2
+            return 2, None
         if scenario_id in receipts:
             _print({"error": f"duplicate receipt scenario: {scenario_id}"}, pretty=pretty)
-            return 2
+            return 2, None
         try:
             result = evaluate_macos_receipt_envelope(scenario_id, envelope)
         except ValueError as exc:
             _print({"error": f"{path.name}: {exc}"}, pretty=pretty)
-            return 2
+            return 2, None
         if not result.receipt_valid or not result.evaluation.passed:
             failures = "; ".join(result.evaluation.failures)
             _print(
                 {"error": f"{path.name}: receipt did not pass: {failures}"},
                 pretty=pretty,
             )
-            return 1
+            return 1, None
         receipts[scenario_id] = envelope["receipt"]
 
     expected_ids = {scenario.id for scenario in macagentbench_scenarios()}
@@ -176,12 +179,24 @@ async def _run_assemble(
         if unexpected:
             details.append(f"unexpected: {', '.join(unexpected)}")
         _print({"error": "receipt set is incomplete (" + "; ".join(details) + ")"}, pretty=pretty)
-        return 2
+        return 2, None
 
     bundle = {
         "receipt_contract_id": macos_receipt_contract_id(),
         "receipts": receipts,
     }
+    return 0, bundle
+
+
+async def _run_assemble(
+    receipts_dir: Path,
+    *,
+    pretty: bool,
+    output_path: Path | None = None,
+) -> int:
+    status, bundle = await _load_receipt_bundle(receipts_dir, pretty=pretty)
+    if bundle is None:
+        return status
     if output_path is None:
         _print(bundle, pretty=pretty)
         return 0
@@ -212,11 +227,23 @@ async def _run_assemble(
     return 0
 
 
+async def _run_qualify_capture(receipts_dir: Path, *, pretty: bool) -> int:
+    status, bundle = await _load_receipt_bundle(receipts_dir, pretty=pretty)
+    if bundle is None:
+        return status
+    readiness = await probe_macos_readiness()
+    qualification = evaluate_macos_qualification(
+        readiness,
+        bundle["receipts"],
+        receipt_contract_id=bundle["receipt_contract_id"],
+    )
+    _print(qualification.to_dict(), pretty=pretty)
+    return 0 if qualification.native_qualification_complete else 1
+
+
 async def _run_capture_status(receipts_dir: Path, *, pretty: bool) -> int:
     try:
-        receipt_paths = sorted(
-            path for path in receipts_dir.iterdir() if path.suffix.casefold() == ".json"
-        )
+        receipt_paths = await asyncio.to_thread(_json_paths, receipts_dir)
     except OSError as exc:
         _print({"error": f"could not list receipt directory: {exc}"}, pretty=pretty)
         return 2
@@ -419,6 +446,12 @@ def main() -> int:
         metavar="DIRECTORY",
         help="report progress for every version-bound scenario envelope",
     )
+    parser.add_argument(
+        "--qualify-capture",
+        type=Path,
+        metavar="DIRECTORY",
+        help="validate a complete capture directory against live Mac readiness",
+    )
     parser.add_argument("--pretty", action="store_true", help="indent the JSON output")
     args = parser.parse_args()
     if args.output is not None and args.assemble is None:
@@ -432,12 +465,13 @@ def main() -> int:
             args.assemble is not None,
             args.init_capture is not None,
             args.capture_status is not None,
+            args.qualify_capture is not None,
         )
     )
     if modes > 1:
         parser.error(
             "--template, --guide, --scenario, --scenario-template, --assemble, "
-            "--init-capture and --capture-status are mutually exclusive"
+            "--init-capture, --capture-status and --qualify-capture are mutually exclusive"
         )
     if args.template:
         if args.receipts is not None:
@@ -458,6 +492,12 @@ def main() -> int:
             parser.error("receipts cannot be supplied with --capture-status")
         return asyncio.run(
             _run_capture_status(args.capture_status, pretty=args.pretty)
+        )
+    if args.qualify_capture is not None:
+        if args.receipts is not None:
+            parser.error("receipts cannot be supplied with --qualify-capture")
+        return asyncio.run(
+            _run_qualify_capture(args.qualify_capture, pretty=args.pretty)
         )
     if args.assemble is not None:
         if args.receipts is not None:
@@ -485,7 +525,7 @@ def main() -> int:
     if args.receipts is None:
         parser.error(
             "receipts is required unless --template, --guide, --scenario-template, "
-            "--assemble, --init-capture or --capture-status is used"
+            "--assemble, --init-capture, --capture-status or --qualify-capture is used"
         )
     return asyncio.run(_run(args.receipts, pretty=args.pretty))
 

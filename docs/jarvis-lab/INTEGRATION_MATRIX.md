@@ -223,6 +223,12 @@ durably written and an existing file is never replaced. Assembly rejects stale
 or failing envelopes, duplicate scenario IDs, missing scenarios and unrelated
 JSON before the native readiness gate runs.
 
+On the physical Mac, `python scripts/macos_agent_bench_qualify.py
+--qualify-capture receipts/ --pretty` performs that same complete directory
+validation and then immediately runs the side-effect-free readiness probe and
+final qualification evaluator. Invalid capture evidence never reaches the
+readiness probe, and portable CI still cannot satisfy the native gate.
+
 `jarvis/cu/macos_bench.py` now defines the first deterministic receipt
 contract, `physical-user-takeover`. CI can evaluate safety evidence without
 posting input: takeover detected and zero synthetic events after detection.
