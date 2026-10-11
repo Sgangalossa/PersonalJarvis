@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -68,6 +69,35 @@ def test_verifier_identity_regexes_are_derived_from_resolved_slug() -> None:
     powershell = (_ROOT / "install/install-verify.ps1").read_text(encoding="utf-8")
     assert "${_expected_repo_regex}" in shell
     assert "[regex]::Escape($EXPECTED_REPO)" in powershell
+
+
+def test_trust_bundle_identity_matches_canonical_repository() -> None:
+    escaped_slug = re.escape(DEFAULT_OFFICIAL_REPO_SLUG)
+    expected_root_identity = (
+        rf"^https://github\.com/{escaped_slug}/\.github/workflows/"
+        r"sign-installer\.yml@refs/tags/v[0-9].*$"
+    )
+    expected_anchor_identity = (
+        rf"^https://github\.com/{escaped_slug}/\.github/workflows/"
+        r"sign-installer\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+"
+        r"(-[A-Za-z0-9._-]+)?$"
+    )
+
+    root = json.loads((_ROOT / "install/tuf/1.root.json").read_text())
+    anchor = json.loads(
+        (_ROOT / "install/in-toto/layout-content-anchor.json").read_text()
+    )
+    anchor_key = anchor["keys"]["github-actions-sign-installer-yml-tag-push"]
+
+    assert root["signed"]["keys"]["fulcio_oidc"]["identity_regex"] == (
+        expected_root_identity
+    )
+    assert anchor_key["keyval"]["identity"] == (
+        f"https://github.com/{DEFAULT_OFFICIAL_REPO_SLUG}/"
+        ".github/workflows/sign-installer.yml@refs/tags/v*"
+    )
+    assert anchor_key["keyval"]["identity_regexp"] == expected_anchor_identity
+    assert DEFAULT_OFFICIAL_REPO_SLUG in anchor["readme"]
 
 
 @pytest.mark.parametrize(
