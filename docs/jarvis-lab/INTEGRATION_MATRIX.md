@@ -234,6 +234,14 @@ validation and then immediately runs the side-effect-free readiness probe and
 final qualification evaluator. Invalid capture evidence never reaches the
 readiness probe, and portable CI still cannot satisfy the native gate.
 
+The isolated browser has a narrower executable hardware check:
+`python -m jarvis.society.browser.install --native-capture-probe`. On macOS it
+opens the managed Chrome runtime, captures a real complete window with
+ScreenCaptureKit, validates the JPEG dimensions and Retina viewport projection,
+then closes the temporary profile without posting input. Its JSON deliberately
+keeps `native_qualification_complete` false; this qualifies only the browser
+capture slice and cannot replace the nine MacAgentBench receipts.
+
 `jarvis/cu/macos_bench.py` now defines the first deterministic receipt
 contract, `physical-user-takeover`. CI can evaluate safety evidence without
 posting input: takeover detected and zero synthetic events after detection.

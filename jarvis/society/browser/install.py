@@ -10,6 +10,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -201,6 +202,34 @@ def snapshot(data_dir: Path | None = None) -> dict[str, Any]:
         "log_tail": [],
         "retry_at": row.get("retry_at", 0),
     }
+
+
+def native_capture_probe(data_dir: Path | None = None) -> dict[str, Any]:
+    """Run the explicit physical-Mac Chrome capture and geometry check."""
+    if sys.platform != "darwin":
+        raise RuntimeError("Native Chrome capture qualification requires a physical Mac")
+    if not is_installed(data_dir):
+        raise RuntimeError("Install the managed browser before native capture qualification")
+    with tempfile.TemporaryDirectory(prefix="jarvis-native-browser-") as profile:
+        output = _run(
+            [
+                str(venv_python(data_dir)),
+                str(runner_path()),
+                "--native-probe",
+                str(browser_executable(data_dir)),
+                profile,
+            ],
+            env=worker_env(data_dir),
+            timeout=60,
+        )
+    rows = [
+        json.loads(line)
+        for line in output.splitlines()
+        if line.startswith('{"kind": "native_probe"')
+    ]
+    if not rows or not rows[-1].get("ok"):
+        raise RuntimeError(f"Native Chrome capture qualification failed: {output[-1200:]}")
+    return rows[-1]
 
 
 def _run(cmd: list[str], *, env: dict[str, str], timeout: float = 900) -> str:
@@ -427,4 +456,7 @@ def _reset_for_tests() -> None:
 
 
 if __name__ == "__main__":
-    print(json.dumps(ensure_installed(system_dependencies="--system-deps" in sys.argv)))
+    if "--native-capture-probe" in sys.argv:
+        print(json.dumps(native_capture_probe(), indent=2))
+    else:
+        print(json.dumps(ensure_installed(system_dependencies="--system-deps" in sys.argv)))
