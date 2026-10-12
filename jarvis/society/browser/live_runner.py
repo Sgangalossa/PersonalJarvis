@@ -116,6 +116,42 @@ class Worker:
             and (not self.manual or bool(getattr(self.native, "input_enabled", False)))
         )
 
+    async def start_native_window(
+        self, factory: Any, pid: int, icon_path: str = ""
+    ) -> bool:
+        """Start native capture, with a page-stream fallback on macOS."""
+        candidate: Any = None
+        try:
+            # Native extension loading belongs to this isolated worker's
+            # main thread; NumPy/OpenCV DLL loading can stall in a pool thread.
+            candidate = factory(int(pid))
+            if not await asyncio.to_thread(candidate.ready.wait, 10):
+                raise RuntimeError("Chrome did not produce a window image")
+            candidate.frame()
+            await asyncio.to_thread(candidate.park)
+        except Exception as exc:
+            if candidate is not None:
+                try:
+                    await asyncio.to_thread(candidate.close)
+                except Exception as close_exc:
+                    logging.getLogger(__name__).debug(
+                        "Native Chrome cleanup failed after startup error (%s)",
+                        type(close_exc).__name__,
+                    )
+            if sys.platform != "darwin":
+                raise
+            logging.getLogger(__name__).warning(
+                "Native macOS Chrome capture unavailable; using page stream (%s)",
+                type(exc).__name__,
+            )
+            return False
+        self.native = candidate
+        if icon_path:
+            self.branding = asyncio.create_task(
+                asyncio.to_thread(candidate.brand, icon_path)
+            )
+        return True
+
     async def rpc(self, kind: str, payload: dict) -> dict:
         key = uuid.uuid4().hex
         future = asyncio.get_running_loop().create_future()
@@ -218,30 +254,23 @@ class Worker:
             try:
                 processes = await connection.send("SystemInfo.getProcessInfo")
                 pid = next(p["id"] for p in processes["processInfo"] if p["type"] == "browser")
-                # Native extension loading belongs to this isolated worker's
-                # main thread; NumPy/OpenCV DLL loading can stall in a pool thread.
-                self.native = NativeWindow(int(pid))
-                if not await asyncio.to_thread(self.native.ready.wait, 10):
-                    raise RuntimeError("Chrome did not produce a window image")
-                self.native.frame()
-                await asyncio.to_thread(self.native.park)
-                if args.get("icon_path"):
-                    self.branding = asyncio.create_task(
-                        asyncio.to_thread(self.native.brand, str(args["icon_path"]))
-                    )
+                await self.start_native_window(
+                    NativeWindow, int(pid), str(args.get("icon_path") or "")
+                )
             finally:
                 await connection.detach()
-            if self.page.url == "about:blank":
+        if self.owns_context and self.page.url == "about:blank":
+            if self.native:
                 await self.page.goto("chrome://newtab/", wait_until="commit", timeout=5000)
-        elif self.owns_context and self.page.url == "about:blank":
-            await self.page.set_content(
-                "<html><head><title>Personal Jarvis — Agent Browser</title></head>"
-                "<body style='background:#fafafa;color:#303030;font:24px system-ui;"
-                "display:grid;place-items:center;height:90vh'><main>"
-                "<h1>Personal Jarvis</h1><p>Your agent browser is ready.</p>"
-                "<p>Ask your agent to open a website, or take control in Personal Jarvis.</p>"
-                "</main></body></html>"
-            )
+            else:
+                await self.page.set_content(
+                    "<html><head><title>Personal Jarvis — Agent Browser</title></head>"
+                    "<body style='background:#fafafa;color:#303030;font:24px system-ui;"
+                    "display:grid;place-items:center;height:90vh'><main>"
+                    "<h1>Personal Jarvis</h1><p>Your agent browser is ready.</p>"
+                    "<p>Ask your agent to open a website, or take control in Personal Jarvis.</p>"
+                    "</main></body></html>"
+                )
         self.state_task = asyncio.create_task(self.watch_state())
         self.stream = asyncio.create_task(self.watch())
         return {

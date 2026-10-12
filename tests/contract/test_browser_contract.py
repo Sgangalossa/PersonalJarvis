@@ -70,6 +70,41 @@ def test_capture_only_native_window_falls_back_to_page_stream_for_takeover():
     assert worker.native_stream_enabled() is True
 
 
+async def test_macos_native_start_failure_closes_capture_and_uses_page_stream(monkeypatch):
+    from jarvis.society.browser import live_runner
+
+    closed = []
+    native = SimpleNamespace(
+        ready=SimpleNamespace(wait=lambda _: True),
+        frame=lambda: (_ for _ in ()).throw(RuntimeError("capture unavailable")),
+        park=lambda: None,
+        close=lambda: closed.append(True),
+    )
+    worker = live_runner.Worker()
+    monkeypatch.setattr(live_runner.sys, "platform", "darwin")
+
+    assert await worker.start_native_window(lambda _: native, 123) is False
+    assert worker.native is None
+    assert closed == [True]
+
+
+async def test_non_macos_native_start_failure_remains_strict(monkeypatch):
+    from jarvis.society.browser import live_runner
+
+    closed = []
+    native = SimpleNamespace(
+        ready=SimpleNamespace(wait=lambda _: False),
+        close=lambda: closed.append(True),
+    )
+    worker = live_runner.Worker()
+    monkeypatch.setattr(live_runner.sys, "platform", "win32")
+
+    with pytest.raises(RuntimeError, match="did not produce a window image"):
+        await worker.start_native_window(lambda _: native, 123)
+    assert worker.native is None
+    assert closed == [True]
+
+
 def test_add_menu_names_the_browser_as_chrome():
     from jarvis.agent_chat.tool_catalog import build_catalog, keyword_rank
 
