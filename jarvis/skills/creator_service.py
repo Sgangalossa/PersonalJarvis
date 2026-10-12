@@ -433,14 +433,15 @@ def validate_skill_md(content: str) -> tuple[dict[str, Any], dict[str, Any] | No
 
     try:
         fm_dict = _extract_frontmatter(content)
-    except ValueError as exc:
+    except ValueError:
+        parse_error = "Malformed YAML frontmatter."
         return (
             {
                 "ok": False,
                 "state": "draft",
-                "errors": [str(exc)],
+                "errors": [parse_error],
                 "warnings": [],
-                "parse_error": str(exc),
+                "parse_error": parse_error,
             },
             None,
         )

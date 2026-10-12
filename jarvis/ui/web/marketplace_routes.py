@@ -1073,8 +1073,21 @@ def _community_payload(index: Any, status: str) -> dict[str, Any]:
                         f"index name {entry.name!r} does not match manifest name {spec.id!r}"
                     )
             except AgentPluginError as exc:
-                # Surfaced to the UI as an invalid entry carrying the reason.
-                plugins.append({**base, "valid": False, "error": str(exc)})
+                # Publisher-controlled manifest values can appear in loader
+                # diagnostics. Keep only bounded metadata in the server log
+                # and never reflect the exception through browse responses.
+                log.warning(
+                    "community plugin %s has an invalid manifest (%s)",
+                    entry.name,
+                    type(exc).__name__,
+                )
+                plugins.append(
+                    {
+                        **base,
+                        "valid": False,
+                        "error": "Invalid community plugin manifest.",
+                    }
+                )
                 continue
             item = spec.model_dump(mode="json")
             item.update(base)
