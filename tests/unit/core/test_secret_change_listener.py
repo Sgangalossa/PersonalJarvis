@@ -40,6 +40,25 @@ def test_a_failing_listener_never_fails_the_save() -> None:
         cfg_mod._SECRET_CHANGE_LISTENERS.remove(_boom)
 
 
+def test_a_failing_listener_does_not_log_exception_details(caplog) -> None:
+    secret_marker = "gsk_SUPER_SECRET_VALUE_1234567890"
+
+    def _boom(slot: str) -> None:
+        raise RuntimeError(f"provider listener failed with {secret_marker}")
+
+    caplog.set_level("WARNING", logger="jarvis.core.config")
+    cfg_mod.add_secret_change_listener(_boom)
+    try:
+        cfg_mod._mark_secret_changed("groq_api_key")
+    finally:
+        cfg_mod._SECRET_CHANGE_LISTENERS.remove(_boom)
+
+    assert secret_marker not in caplog.text
+    assert "provider listener failed with" not in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert "groq_api_key" in caplog.text
+
+
 def test_the_health_record_forgets_what_the_old_key_did() -> None:
     """The web layer's listener maps the slot to every card that reads it."""
     from jarvis.brain import provider_health_ledger as ledger
