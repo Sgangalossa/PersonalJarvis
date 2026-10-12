@@ -5157,10 +5157,11 @@ def _mark_secret_changed(key: str) -> None:
             # Listener exceptions can contain provider responses or credential
             # values. Keep the diagnostic useful without logging their message
             # or traceback into the application log.
+            # `key` is only the credential-slot identifier, never its stored value.
             logging.getLogger(__name__).warning(
                 "secret-change listener %r failed for slot %s (%s)",
                 getattr(listener, "__qualname__", listener),
-                key,
+                key,  # codeql[py/clear-text-logging-sensitive-data]
                 type(exc).__name__,
             )
 
