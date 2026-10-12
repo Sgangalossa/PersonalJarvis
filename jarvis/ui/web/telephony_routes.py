@@ -67,6 +67,14 @@ _AUTH_TOKEN_ENV = "TWILIO_AUTH_TOKEN"  # noqa: S105 - ENV var name, not a value
 _E164_RE = re.compile(r"^\+[1-9]\d{6,14}$")
 _URL_RE = re.compile(r"^https?://[^\s/]+(?:/.*)?$", re.IGNORECASE)
 
+_PROVISION_STATUS_TEXT = {
+    "bad_key": "credentials were rejected",
+    "no_credits": "the account is unavailable",
+    "rate_limited": "the provider is rate-limiting requests",
+    "model_unavailable": "the requested resource is unavailable",
+    "unreachable": "the provider could not be reached",
+}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -108,6 +116,12 @@ def _manager(request: Request) -> TelephonyManager:
 
 def _auth_token() -> str | None:
     return get_secret(_AUTH_TOKEN_KEY, _AUTH_TOKEN_ENV)
+
+
+def _public_provision_error(action: str, status: str) -> str:
+    """Return bounded UI text without reflecting exception-derived content."""
+    reason = _PROVISION_STATUS_TEXT.get(status, "the request could not be completed")
+    return f"{action} failed: {reason}."
 
 
 def _mask_sid(sid: str) -> str:
@@ -395,8 +409,11 @@ async def post_test(request: Request) -> JSONResponse:
             }
         )
     except TelephonyProvisionError as exc:
-        # str(exc) is a clean sentence built by provisioning.sdk_failure / _client.
-        message = str(exc)
+        message = _public_provision_error("Twilio credential check", exc.status)
+        log.warning(
+            "Twilio credential check rejected (%s)",
+            type(exc).__name__,
+        )
         mgr.set_reachable(False, message)
         return JSONResponse(
             {
@@ -640,9 +657,14 @@ async def post_outbound(request: Request, body: OutboundCall) -> JSONResponse:
             public_base_url=public_base_url,
         )
     except TelephonyProvisionError as exc:
-        # A clean English sentence: our own validation text, or the classified
-        # summary from provisioning.sdk_failure — never Twilio's raw response.
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=409)
+        log.warning("Outbound call rejected (%s)", type(exc).__name__)
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": _public_provision_error("Outbound call", exc.status),
+            },
+            status_code=409,
+        )
     except Exception as exc:  # noqa: BLE001 - never 500 a UI button
         return JSONResponse(
             {"ok": False, "error": internal_error("outbound call", exc, logger=log)},
