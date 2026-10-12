@@ -152,6 +152,45 @@ class Worker:
             )
         return True
 
+    async def start_native_capture(
+        self, browser: Any, factory: Any, icon_path: str = ""
+    ) -> bool:
+        """Discover Chrome and start native capture without stranding macOS."""
+        connection: Any = None
+        try:
+            connection = await browser.new_browser_cdp_session()
+            processes = await connection.send("SystemInfo.getProcessInfo")
+            pid = next(
+                (
+                    process.get("id")
+                    for process in processes.get("processInfo", [])
+                    if process.get("type") == "browser"
+                ),
+                None,
+            )
+            if pid is None:
+                raise RuntimeError("Chrome browser process was not published over CDP")
+            return await self.start_native_window(factory, int(pid), icon_path)
+        except Exception as exc:
+            if sys.platform != "darwin":
+                raise
+            logging.getLogger(__name__).warning(
+                "Native macOS Chrome discovery unavailable; using page stream (%s)",
+                type(exc).__name__,
+            )
+            return False
+        finally:
+            if connection is not None:
+                try:
+                    await connection.detach()
+                except Exception as detach_exc:
+                    if sys.platform != "darwin":
+                        raise
+                    logging.getLogger(__name__).debug(
+                        "Native macOS Chrome discovery cleanup failed (%s)",
+                        type(detach_exc).__name__,
+                    )
+
     async def rpc(self, kind: str, payload: dict) -> dict:
         key = uuid.uuid4().hex
         future = asyncio.get_running_loop().create_future()
@@ -250,15 +289,9 @@ class Worker:
             self.page_opened(page)
         self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
         if self.owns_context and native_enabled:
-            connection = await self.context.browser.new_browser_cdp_session()
-            try:
-                processes = await connection.send("SystemInfo.getProcessInfo")
-                pid = next(p["id"] for p in processes["processInfo"] if p["type"] == "browser")
-                await self.start_native_window(
-                    NativeWindow, int(pid), str(args.get("icon_path") or "")
-                )
-            finally:
-                await connection.detach()
+            await self.start_native_capture(
+                self.context.browser, NativeWindow, str(args.get("icon_path") or "")
+            )
         if self.owns_context and self.page.url == "about:blank":
             if self.native:
                 await self.page.goto("chrome://newtab/", wait_until="commit", timeout=5000)

@@ -105,6 +105,34 @@ async def test_non_macos_native_start_failure_remains_strict(monkeypatch):
     assert closed == [True]
 
 
+async def test_macos_native_discovery_failure_detaches_and_uses_page_stream(monkeypatch):
+    from jarvis.society.browser import live_runner
+
+    detached = []
+
+    class Connection:
+        async def send(self, _):
+            return {"processInfo": [{"id": 456, "type": "gpu-process"}]}
+
+        async def detach(self):
+            detached.append(True)
+
+    async def connect():
+        return Connection()
+
+    worker = live_runner.Worker()
+    monkeypatch.setattr(live_runner.sys, "platform", "darwin")
+
+    assert (
+        await worker.start_native_capture(
+            SimpleNamespace(new_browser_cdp_session=connect), lambda _: None
+        )
+        is False
+    )
+    assert worker.native is None
+    assert detached == [True]
+
+
 def test_add_menu_names_the_browser_as_chrome():
     from jarvis.agent_chat.tool_catalog import build_catalog, keyword_rank
 
