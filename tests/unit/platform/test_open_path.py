@@ -67,10 +67,14 @@ def test_open_file_keeps_shell_metacharacters_inside_one_absolute_argv_item():
 
 
 def test_open_file_embedded_nul_returns_false_instead_of_raising():
+    def reject_embedded_nul(argv, **_kwargs):
+        assert "\\x00" in argv[1]
+        raise ValueError("embedded null byte")
+
     with patch.object(op, "detect_capabilities", return_value=_caps()), \
          patch.object(op, "detect_platform", return_value="linux"), \
-         patch.object(op.subprocess, "Popen", side_effect=ValueError("embedded null byte")):
-        assert op.open_file(Path("/tmp/bad\\x00name")) is False
+         patch.object(op.subprocess, "Popen", side_effect=reject_embedded_nul):
+        assert op.open_file(Path("/tmp/bad\x00name")) is False
 
 
 def test_open_file_darwin_uses_open():
