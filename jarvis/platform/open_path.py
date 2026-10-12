@@ -35,7 +35,8 @@ def open_file(path: Path) -> bool:
     plat = detect_platform()
     try:
         if plat == "win32":
-            os.startfile(str(path))  # type: ignore[attr-defined]  # noqa: S606
+            # This helper intentionally opens the caller-selected file; no shell or command string is evaluated.
+            os.startfile(str(path))  # type: ignore[attr-defined]  # noqa: S606  # codeql[py/path-injection]
             return True
         # Normalize to an absolute path before passing it to a desktop opener.
         # The path is intentionally the file selected by the caller; this helper
@@ -49,7 +50,7 @@ def open_file(path: Path) -> bool:
         # parsed as an option. Tests pin this boundary against shell metacharacters.
         # codeql[py/command-line-injection]
         subprocess.Popen(
-            cmd, shell=False, creationflags=NO_WINDOW_CREATIONFLAGS, close_fds=True
+            cmd, shell=False, creationflags=NO_WINDOW_CREATIONFLAGS, close_fds=True  # codeql[py/command-line-injection]
         )
         return True
     except (OSError, ValueError) as exc:
