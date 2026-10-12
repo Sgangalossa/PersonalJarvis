@@ -131,6 +131,24 @@ def test_validate_reports_parse_error_for_garbage() -> None:
     assert frontmatter is None
 
 
+def test_validate_redacts_malformed_yaml_source_from_client_result(caplog) -> None:
+    private_path = "/srv/private/token-DO-NOT-EXPOSE"
+    content = f"---\nname: [{private_path}\n---\n\n## Body\n"
+
+    validation, frontmatter = validate_skill_md(content)
+
+    assert validation == {
+        "ok": False,
+        "state": "draft",
+        "errors": ["Malformed YAML frontmatter."],
+        "warnings": [],
+        "parse_error": "Malformed YAML frontmatter.",
+    }
+    assert frontmatter is None
+    assert private_path not in str(validation)
+    assert "skill creator frontmatter parse failed" in caplog.text
+
+
 def test_render_draft_produces_parseable_skill_md() -> None:
     draft = {
         "name": "Rendered Skill",
