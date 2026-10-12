@@ -51,6 +51,28 @@ def test_open_file_linux_makes_option_like_relative_path_absolute():
         assert not argv[1].startswith("-")
 
 
+def test_open_file_keeps_shell_metacharacters_inside_one_absolute_argv_item():
+    # A path is a single data argument, never shell syntax; subprocess must
+    # continue receiving an argv list with shell=False.
+    path = Path("/tmp/report; touch injected.txt")
+    with patch.object(op, "detect_capabilities", return_value=_caps()), \
+         patch.object(op, "detect_platform", return_value="linux"), \
+         patch.object(op.subprocess, "Popen") as popen:
+        assert op.open_file(path) is True
+
+    argv = popen.call_args.args[0]
+    assert argv == ["xdg-open", Path(op.os.path.abspath(str(path))).as_posix()]
+    assert popen.call_args.kwargs["shell"] is False
+    assert popen.call_args.kwargs["close_fds"] is True
+
+
+def test_open_file_embedded_nul_returns_false_instead_of_raising():
+    with patch.object(op, "detect_capabilities", return_value=_caps()), \
+         patch.object(op, "detect_platform", return_value="linux"), \
+         patch.object(op.subprocess, "Popen", side_effect=ValueError("embedded null byte")):
+        assert op.open_file(Path("/tmp/bad\\x00name")) is False
+
+
 def test_open_file_darwin_uses_open():
     with patch.object(op, "detect_capabilities", return_value=_caps()), \
          patch.object(op, "detect_platform", return_value="darwin"), \

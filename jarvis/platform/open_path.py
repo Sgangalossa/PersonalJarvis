@@ -38,17 +38,21 @@ def open_file(path: Path) -> bool:
             os.startfile(str(path))  # type: ignore[attr-defined]  # noqa: S606
             return True
         # Normalize to an absolute path before passing it to a desktop opener.
-        # This prevents a relative filename beginning with '-' from being parsed
-        # as an option by open/xdg-open. No shell is involved.
+        # The path is intentionally the file selected by the caller; this helper
+        # does not read or write its contents. The absolute form prevents a
+        # relative filename beginning with '-' from being parsed as an option.
+        # codeql[py/path-injection]
         path_str = Path(os.path.abspath(os.fspath(path))).as_posix()
         cmd = ["open", path_str] if plat == "darwin" else ["xdg-open", path_str]
-        # The opener is selected from this module's fixed allowlist and the file
-        # is a separate absolute argv item; no shell or option parsing is involved.
-        subprocess.Popen(  # noqa: S603  # lgtm[py/command-line-injection]
+        # The executable is selected from fixed literals above, ``shell=False``
+        # passes the path as one argv operand, and the absolute path cannot be
+        # parsed as an option. Tests pin this boundary against shell metacharacters.
+        # codeql[py/command-line-injection]
+        subprocess.Popen(
             cmd, shell=False, creationflags=NO_WINDOW_CREATIONFLAGS, close_fds=True
         )
         return True
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         log.warning("open_file failed (%s)", type(exc).__name__)
         return False
 
