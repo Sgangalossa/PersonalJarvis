@@ -281,12 +281,15 @@ Chrome process. The capture thread is stopped and joined before browser cleanup.
 Dependencies are platform-marked inside the isolated, hash-locked browser runtime;
 base installation and headless boot do not import native capture packages.
 
-macOS, Linux and non-interactive Windows retain the existing page-only CDP stream
-and controls. Full native Chrome UI capture/input is **not implemented** on macOS
-or Linux and must not be described as native-window parity or release-complete.
-The existing page-stream behavior on those hosts is intentionally preserved.
-Current native evidence is Windows-only; cross-platform full-window acceptance
-remains open under RUB-17.
+macOS with a pre-existing Screen Recording grant now captures the owned Chrome
+window by browser PID through ScreenCaptureKit. The probe never prompts for TCC;
+missing permission or framework support retains the existing page-only CDP
+stream. The macOS path is capture-only: manual takeover switches to page pixels
+and Playwright input so displayed and actionable coordinates stay aligned.
+Linux and non-interactive Windows retain page-only CDP streaming. Native macOS
+output, permission behavior and Retina geometry are contract-tested but not
+qualified on physical hardware, so cross-platform full-window acceptance
+remains open under RUB-17 and must not be described as release-complete.
 
 ## Service connectors (2026-09-10, T3)
 

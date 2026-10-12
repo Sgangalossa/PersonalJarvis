@@ -106,9 +106,14 @@ buttons, OS file pickers, moving/resizing the browser window and cross-app drag
 or switching, returning a `core:computer-use` handoff instead. Ordinary URL,
 page, form and CDP tab work stays with browser-use.
 
-Native full-Chrome-window capture on macOS remains an upstream parity gap. It is
-not falsely advertised as implemented; page-only CDP streaming remains the
-macOS behavior until a separate ScreenCaptureKit/AX capability is qualified.
+Native full-Chrome-window capture on macOS is now wired through
+ScreenCaptureKit in the isolated browser worker. The capability probe is
+side-effect-free and requires an existing Screen Recording grant; otherwise it
+retains page-only CDP streaming. Manual takeover deliberately returns to page
+pixels and Playwright input because the macOS path captures but does not inject
+native Chrome input. Portable contracts cover the probe, coordinate projection
+and takeover boundary. Real ScreenCaptureKit output, permission behavior and
+Retina geometry still require physical-Mac qualification and are not complete.
 
 ### C. Memory/state continuity — audit complete; no second store
 

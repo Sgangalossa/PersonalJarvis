@@ -17,11 +17,26 @@ log = logging.getLogger(__name__)
 
 
 def available() -> bool:
-    """Other hosts retain their existing page stream until native capture exists."""
+    import importlib.util
+
+    if sys.platform == "darwin":
+        required = ("Foundation", "PIL", "Quartz", "ScreenCaptureKit")
+        if any(importlib.util.find_spec(name) is None for name in required):
+            return False
+        try:
+            import Quartz  # type: ignore[import-not-found]
+            import ScreenCaptureKit as sck  # type: ignore[import-not-found]
+
+            return bool(
+                getattr(sck, "SCScreenshotManager", None)
+                and Quartz.CGPreflightScreenCaptureAccess()
+            )
+        except Exception:
+            log.debug("macOS Chrome capture probe failed", exc_info=True)
+            return False
     if sys.platform != "win32":
         return False
     import ctypes
-    import importlib.util
     from ctypes import wintypes
 
     if importlib.util.find_spec("windows_capture") is None:
@@ -38,7 +53,9 @@ def available() -> bool:
     return True
 
 
-class NativeWindow:
+class _WindowsNativeWindow:
+    input_enabled = True
+
     def __init__(self, pid: int) -> None:
         import ctypes
         from ctypes import wintypes
@@ -450,3 +467,165 @@ class NativeWindow:
             self._check_owner()
             if not u.SetWindowPos(self.hwnd, 1, -16000, -16000, 0, 0, 0x11):
                 raise RuntimeError("The Chrome window could not be placed in the background")
+
+
+def _project_macos_viewport(
+    x: float, y: float, frame_width: int, frame_height: int
+) -> tuple[float, float, int, int]:
+    """Project the fixed CDP viewport below Chrome's native toolbar."""
+    scale = min(frame_width / 1280, frame_height / 800)
+    viewport_width = 1280 * scale
+    viewport_height = 800 * scale
+    left = max(0.0, (frame_width - viewport_width) / 2)
+    top = max(0.0, frame_height - viewport_height)
+    return left + x * scale, top + y * scale, frame_width, frame_height
+
+
+class _MacNativeWindow:
+    """Capture one owned Chrome window without enabling global input."""
+
+    input_enabled = False
+
+    def __init__(self, pid: int) -> None:
+        import Quartz  # type: ignore[import-not-found]
+        import ScreenCaptureKit as sck  # type: ignore[import-not-found]
+        from Foundation import NSMutableData  # type: ignore[import-not-found]
+
+        self.pid = pid
+        self.Quartz = Quartz
+        self.NSMutableData = NSMutableData
+        self.sck = sck
+        self.latest: dict[str, Any] | None = None
+        self.lock = threading.Lock()
+        self.ready = threading.Event()
+        self.stop = threading.Event()
+        self.failed = False
+        content = self._shareable_content()
+        candidates = []
+        for window in content.windows() or []:
+            app = window.owningApplication()
+            frame = window.frame()
+            if (
+                app is not None
+                and int(app.processID()) == pid
+                and bool(window.isOnScreen())
+                and frame.size.width > 0
+                and frame.size.height > 0
+            ):
+                candidates.append((frame.size.width * frame.size.height, window))
+        if not candidates:
+            raise RuntimeError("The owned Chrome window is unavailable")
+        self.window = max(candidates, key=lambda row: row[0])[1]
+        self.capture_filter = sck.SCContentFilter.alloc().initWithDesktopIndependentWindow_(
+            self.window
+        )
+        self.config = sck.SCStreamConfiguration.alloc().init()
+        scale = float(self.capture_filter.pointPixelScale())
+        frame = self.window.frame()
+        self.config.setWidth_(max(1, round(frame.size.width * scale)))
+        self.config.setHeight_(max(1, round(frame.size.height * scale)))
+        self.config.setShowsCursor_(False)
+        ignore_shadows = getattr(self.config, "setIgnoreShadowsSingleWindow_", None)
+        if not callable(ignore_shadows):
+            raise RuntimeError("Chrome capture cannot exclude window shadows")
+        ignore_shadows(True)
+        self.thread = threading.Thread(
+            target=self._capture_loop, name="browser-window-capture", daemon=True
+        )
+        self.thread.start()
+
+    def _shareable_content(self) -> Any:
+        box: dict[str, Any] = {}
+        ready = threading.Event()
+
+        def complete(content: Any, error: Any) -> None:
+            box.update(content=content, error=error)
+            ready.set()
+
+        self.sck.SCShareableContent.getShareableContentWithCompletionHandler_(complete)
+        if not ready.wait(3) or box.get("content") is None or box.get("error") is not None:
+            raise RuntimeError("Chrome window catalogue is unavailable")
+        return box["content"]
+
+    def _capture_once(self) -> dict[str, Any]:
+        box: dict[str, Any] = {}
+        ready = threading.Event()
+
+        def complete(image: Any, error: Any) -> None:
+            box.update(image=image, error=error)
+            ready.set()
+
+        self.sck.SCScreenshotManager.captureImageWithFilter_configuration_completionHandler_(
+            self.capture_filter, self.config, complete
+        )
+        if not ready.wait(3) or box.get("image") is None or box.get("error") is not None:
+            raise RuntimeError("Chrome window image is unavailable")
+        image = box["image"]
+        data = self.NSMutableData.data()
+        destination = self.Quartz.CGImageDestinationCreateWithData(
+            data, "public.jpeg", 1, None
+        )
+        if destination is None:
+            raise RuntimeError("Chrome window image encoder is unavailable")
+        self.Quartz.CGImageDestinationAddImage(
+            destination,
+            image,
+            {self.Quartz.kCGImageDestinationLossyCompressionQuality: 0.75},
+        )
+        if not self.Quartz.CGImageDestinationFinalize(destination):
+            raise RuntimeError("Chrome window image encoding failed")
+        return {
+            "bytes": bytes(data),
+            "timestamp": time.time(),
+            "width": int(self.Quartz.CGImageGetWidth(image)),
+            "height": int(self.Quartz.CGImageGetHeight(image)),
+        }
+
+    def _capture_loop(self) -> None:
+        try:
+            while not self.stop.is_set():
+                frame = self._capture_once()
+                with self.lock:
+                    self.latest = frame
+                self.ready.set()
+                self.stop.wait(1 / 15)
+        except Exception:
+            self.failed = True
+            self.ready.set()
+            log.exception("Native Chrome frame failed")
+
+    def frame(self) -> dict[str, Any] | None:
+        if self.failed:
+            raise RuntimeError("The Chrome window capture stopped")
+        with self.lock:
+            return dict(self.latest) if self.latest else None
+
+    def title(self) -> str:
+        return str(self.window.title() or "")
+
+    def viewport_point(self, x: float, y: float) -> tuple[float, float, int, int]:
+        frame = self.frame()
+        if not frame:
+            raise RuntimeError("Chrome frame is unavailable")
+        return _project_macos_viewport(x, y, frame["width"], frame["height"])
+
+    def brand(self, _icon_path: str) -> bool:
+        return False
+
+    def input(self, _op: str, _args: dict) -> None:
+        raise RuntimeError("Native Chrome input is unavailable on macOS")
+
+    def park(self) -> None:
+        # ScreenCaptureKit needs the window to remain on screen. The isolated
+        # worker never raises or focuses it and manual control uses page input.
+        return None
+
+    def close(self) -> None:
+        self.stop.set()
+        self.thread.join(timeout=4)
+
+
+def NativeWindow(pid: int) -> _WindowsNativeWindow | _MacNativeWindow:
+    if sys.platform == "darwin":
+        return _MacNativeWindow(pid)
+    return _WindowsNativeWindow(pid)

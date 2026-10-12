@@ -109,6 +109,13 @@ class Worker:
         self.cursor_on = False
         self.cursor_jobs: set[asyncio.Task] = set()
 
+    def native_stream_enabled(self) -> bool:
+        """Manual control uses page pixels when native input is unavailable."""
+        return bool(
+            self.native
+            and (not self.manual or bool(getattr(self.native, "input_enabled", False)))
+        )
+
     async def rpc(self, kind: str, payload: dict) -> dict:
         key = uuid.uuid4().hex
         future = asyncio.get_running_loop().create_future()
@@ -240,7 +247,7 @@ class Worker:
         return {
             "generation": self.generation,
             "protocol": PROTOCOL_VERSION,
-            "full_window": bool(self.native),
+            "full_window": self.native_stream_enabled(),
         }
 
     async def launch_context(self, profile: str, **options: Any) -> Any:
@@ -337,7 +344,7 @@ class Worker:
             finally:
                 await session.detach()
         focused = self.browser.get_focused_target() if self.browser is not None else None
-        if self.native and self.manual:
+        if self.native and self.manual and getattr(self.native, "input_enabled", False):
             window_title = self.native.title()
             candidates = []
             for page in self.tabs.values():
@@ -411,8 +418,12 @@ class Worker:
                 if self.viewers:
                     page = await self.focused()
                     target = next((t for t, p in self.tabs.items() if p is page), "")
-                    if self.native:
+                    if self.native_stream_enabled():
                         self.target = target
+                        if self.cdp:
+                            await self.cdp.send("Page.stopScreencast")
+                            await self.cdp.detach()
+                            self.cdp = None
                     elif page and (target != self.target or self.cdp is None):
                         await self.switch_stream(page, target)
                     emit(
@@ -423,7 +434,7 @@ class Worker:
                         url=page.url if page else "",
                         target=target,
                         tabs=[{"id": t, "url": p.url} for t, p in self.tabs.items()],
-                        full_window=bool(self.native),
+                        full_window=self.native_stream_enabled(),
                     )
                 elif self.cdp:
                     await self.cdp.send("Page.stopScreencast")
@@ -446,7 +457,7 @@ class Worker:
         while not self.closed:
             try:
                 if self.viewers:
-                    if self.native:
+                    if self.native_stream_enabled():
                         native_frame = self.native.frame()
                         if native_frame and (
                             self.native_replay or native_frame["timestamp"] != self.native_frame_at
@@ -476,7 +487,7 @@ class Worker:
                             "frame",
                             generation=self.generation,
                             sequence=self.sequence,
-                            full_window=bool(self.native),
+                            full_window=self.native_stream_enabled(),
                             **frame,
                         )
             except asyncio.CancelledError:
@@ -655,11 +666,16 @@ class Worker:
                 if generation != self.takeover_generation:
                     return {"manual": self.manual}
                 self.manual = True
+                self.latest = None
                 if self.pointer:
                     self.pointer.clear()
                 await self.show_page_cursor(False)
             else:
-                if self.native and self.manual:
+                if (
+                    self.native
+                    and self.manual
+                    and getattr(self.native, "input_enabled", False)
+                ):
                     await self.ensure_browser()
                     from browser_use.browser import events  # type: ignore[import-not-found]
 
@@ -670,6 +686,9 @@ class Worker:
                             events.SwitchTabEvent(target_id=target)
                         )
                 self.manual = False
+                self.latest = None
+                if self.native:
+                    self.native_replay = self.viewers
                 self.agent_gate.set()
                 if self.cursor_on:
                     await self.show_page_cursor(True)
@@ -683,7 +702,11 @@ class Worker:
             return {}
         if not self.manual:
             raise RuntimeError("Take control of the browser before interacting")
-        if self.native and op in {"click", "scroll", "text", "key"}:
+        if (
+            self.native
+            and getattr(self.native, "input_enabled", False)
+            and op in {"click", "scroll", "text", "key"}
+        ):
             if op == "key" and args.get("key") == "Control+t":
                 async with self.context.expect_page(timeout=5000) as opened:
                     await asyncio.to_thread(self.native.input, op, args)
@@ -750,7 +773,7 @@ class Worker:
     async def main(self) -> None:
         from native_window import available
 
-        if available():
+        if sys.platform == "win32" and available():
             # Native DLL initialization must finish before a Windows CRT stdin
             # reader holds its stream lock in another thread.
             __import__("windows_capture")

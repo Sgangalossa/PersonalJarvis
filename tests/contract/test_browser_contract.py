@@ -1,5 +1,6 @@
 """Deterministic tests for browser contracts and policy boundaries."""
 
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -33,6 +34,40 @@ def test_native_window_probe_degrades_without_native_dependencies(monkeypatch, p
     monkeypatch.setattr(native_window.sys, "platform", platform)
     monkeypatch.setattr(importlib.util, "find_spec", lambda _: None)
     assert native_window.available() is False
+
+
+@pytest.mark.parametrize("permission", [False, True])
+def test_macos_native_window_probe_is_permission_gated(monkeypatch, permission):
+    import importlib.util
+
+    from jarvis.society.browser import native_window
+
+    quartz = SimpleNamespace(CGPreflightScreenCaptureAccess=lambda: permission)
+    capture = SimpleNamespace(SCScreenshotManager=object())
+    monkeypatch.setattr(native_window.sys, "platform", "darwin")
+    monkeypatch.setattr(importlib.util, "find_spec", lambda _: object())
+    monkeypatch.setitem(sys.modules, "Quartz", quartz)
+    monkeypatch.setitem(sys.modules, "ScreenCaptureKit", capture)
+    assert native_window.available() is permission
+
+
+def test_macos_native_frame_projects_page_below_chrome_toolbar():
+    from jarvis.society.browser.native_window import _project_macos_viewport
+
+    assert _project_macos_viewport(0, 0, 1280, 900) == (0, 100, 1280, 900)
+    assert _project_macos_viewport(640, 400, 2560, 1800) == (1280, 1000, 2560, 1800)
+
+
+def test_capture_only_native_window_falls_back_to_page_stream_for_takeover():
+    from jarvis.society.browser.live_runner import Worker
+
+    worker = Worker()
+    worker.native = SimpleNamespace(input_enabled=False)
+    assert worker.native_stream_enabled() is True
+    worker.manual = True
+    assert worker.native_stream_enabled() is False
+    worker.native.input_enabled = True
+    assert worker.native_stream_enabled() is True
 
 
 def test_add_menu_names_the_browser_as_chrome():
