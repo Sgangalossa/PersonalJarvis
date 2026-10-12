@@ -420,18 +420,22 @@ def _acquire_fd(fd: int) -> None:
 
 
 def _release_fd(fd: int) -> None:
-    try:
-        os.lseek(fd, 0, os.SEEK_SET)
-        if sys.platform == "win32":
+    if sys.platform == "win32":
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
             import msvcrt  # noqa: PLC0415 - Windows-only, off import floor
 
             msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl  # noqa: PLC0415 - POSIX-only, off import floor
+        finally:
+            os.close(fd)
+        return
 
-            fcntl.flock(fd, fcntl.LOCK_UN)
-    finally:
-        os.close(fd)
+    # POSIX flock locks are attached to the open file description and survive
+    # parent close when a child inherited the descriptor. Explicit LOCK_UN here
+    # would release the child's lock too, letting a second Jarvis process enter
+    # a profile the child is still using. Closing this descriptor releases the
+    # lock automatically when the last inherited descriptor closes.
+    os.close(fd)
 
 
 class ExclusiveProcessLock:
