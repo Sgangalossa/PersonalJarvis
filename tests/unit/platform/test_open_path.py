@@ -68,7 +68,7 @@ def test_open_file_keeps_shell_metacharacters_inside_one_absolute_argv_item():
 
 def test_open_file_embedded_nul_returns_false_instead_of_raising():
     def reject_embedded_nul(argv, **_kwargs):
-        assert "\\x00" in argv[1]
+        assert "\x00" in argv[1]
         raise ValueError("embedded null byte")
 
     with patch.object(op, "detect_capabilities", return_value=_caps()), \
