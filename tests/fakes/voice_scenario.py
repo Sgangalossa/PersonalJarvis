@@ -146,6 +146,12 @@ class _ScenarioBridge:
         )
         self.calls: list[str] = []
         self.closed = False
+        self._has_pending_confirmation = False
+
+    @property
+    def has_pending_confirmation(self) -> bool:
+        """Match the real bridge contract used by echo-confirmation handling."""
+        return self._has_pending_confirmation
 
     def set_language(self, language: str) -> None:
         del language
@@ -164,7 +170,10 @@ class _ScenarioBridge:
                 "success": False,
                 "error": "Tool is not available in this session.",
             }
-        return wire_name, tool.result()
+        result = tool.result()
+        if result.get("confirmation_required") is True:
+            self._has_pending_confirmation = True
+        return wire_name, result
 
     async def close(self) -> None:
         self.closed = True
