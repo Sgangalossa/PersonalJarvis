@@ -45,9 +45,12 @@ jobs:
             # currently present on this SHA, before querying the alert API.
             if [[ "$pending_analyses" == "0" && "$has_python" -gt 0 \
               && "$has_javascript" -gt 0 && "$codeql_status" == "completed" ]]; then
-              gh api -H 'Accept: application/vnd.github+json' \
+              gh api --paginate --slurp -H 'Accept: application/vnd.github+json' \
                 "repos/${GITHUB_REPOSITORY}/code-scanning/alerts?tool_name=CodeQL&state=open&pr=${PR_NUMBER}&per_page=100" \
-                > codeql-diagnostic/alerts.json
+                > codeql-diagnostic/alerts-pages.json
+              # --paginate emits one JSON array per page; flatten into the schema
+              # consumed below so alerts beyond the first 100 are not silently lost.
+              jq 'add' codeql-diagnostic/alerts-pages.json > codeql-diagnostic/alerts.json
 
               jq '[.[] | {
                 number,
