@@ -1,5 +1,13 @@
 # JARVIS-LAB next remote frontier
 
+## Accepted product direction (2026-10-12)
+
+[Product roadmap](PRODUCT_ROADMAP.md) retains the user's security, privacy,
+PARASSITA networking and complete visual-mode requirements. Current reliability,
+installation and physical-Mac evidence take precedence over starting the new
+network/visual work. Tests and documentation accompany every increment.
+
+
 Verified on 2026-10-05 after the latest autonomous blocks: reminder scheduling is now exposed as a real Brain tool, preserves the originating turn trace into TaskScheduler, is classified as a write tool (hidden on signalless and screenshot turns), and has a registered capability with EN/DE/IT intent coverage. The installer-smoke release lookup is authenticated, the recent Cost-attribution series is restored and the GPT-Live voice-preview path is now hardened against incomplete session closure. **Exact branch HEAD is deliberately not copied into this file: this document changes HEAD when it is committed. Use the GitHub `jarvis-lab` branch endpoint as the authoritative SHA.** The newest blocks must not be described as green until their active CI run completes.
 
 ## 2026-10-05 continuous reliability state
