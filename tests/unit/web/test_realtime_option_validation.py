@@ -40,7 +40,7 @@ def test_put_realtime_options_rejects_values_outside_curated_catalog(
     )
 
     response = TestClient(_app()).put(
-        "/api/providers/openai-realtime/realtime-options",
+        "/api/providers/openai-live/realtime-options",
         json=payload,
     )
 
@@ -64,13 +64,13 @@ def test_put_realtime_options_allows_fully_omitted_partial_update(
         config_writer, "set_brain_provider_model", unexpected_write
     )
     app = _app()
-    app.state.config.brain.providers["openai-realtime"] = BrainProviderConfig(
+    app.state.config.brain.providers["openai-live"] = BrainProviderConfig(
         model="gpt-realtime-2.1",
         voice="echo",
     )
 
     response = TestClient(app).put(
-        "/api/providers/openai-realtime/realtime-options",
+        "/api/providers/openai-live/realtime-options",
         json={},
     )
 
@@ -93,7 +93,7 @@ def test_put_realtime_options_keeps_explicit_clear_contract(
     )
 
     response = TestClient(_app()).put(
-        "/api/providers/openai-realtime/realtime-options",
+        "/api/providers/openai-live/realtime-options",
         json={"model": "", "voice": ""},
     )
 
@@ -108,7 +108,7 @@ def test_get_realtime_options_reports_preview_capability(
     client = TestClient(_app())
 
     api_response = client.get(
-        "/api/providers/openai-realtime/realtime-options"
+        "/api/providers/openai-live/realtime-options"
     )
     removed_response = client.get(
         "/api/providers/codex-subscription-realtime/realtime-options"
