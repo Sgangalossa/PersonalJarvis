@@ -50,7 +50,10 @@ def open_file(path: Path) -> bool:
         # parsed as an option. Tests pin this boundary against shell metacharacters.
         # codeql[py/command-line-injection]
         subprocess.Popen(
-            cmd, shell=False, creationflags=NO_WINDOW_CREATIONFLAGS, close_fds=True  # codeql[py/command-line-injection]
+            cmd,  # codeql[py/command-line-injection]
+            shell=False,
+            creationflags=NO_WINDOW_CREATIONFLAGS,
+            close_fds=True,
         )
         return True
     except (OSError, ValueError) as exc:
