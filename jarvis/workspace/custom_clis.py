@@ -541,24 +541,29 @@ def clear_logo(entry_id: str) -> CustomCli:
     return entries[index]
 
 
-def logo_file(entry_id: str) -> tuple[Path, str] | None:
-    """``(path, media type)`` of this entry's logo, or ``None`` if it has none.
+def logo_file_for_entry(entry: CustomCli) -> tuple[Path, str] | None:
+    """``(path, media type)`` of a resolved entry's logo, if it has one.
 
     The file name is rebuilt from the id rather than trusted from the store, so
     a hand-edited ``"logo": "../../.env"`` reads as "no logo" instead of as a
     path traversal out of the logo directory.
     """
-    entry = get_custom_cli(entry_id)
-    if entry is None or not entry.logo:
+    if not entry.logo:
         return None
     suffix = Path(entry.logo).suffix.lower()
     media = LOGO_TYPES.get(suffix)
     if media is None:
         return None
-    path = _logo_path(entry_id, suffix)
+    path = _logo_path(entry.id, suffix)
     if path is None:
         return None
     return (path, media) if path.is_file() else None
+
+
+def logo_file(entry_id: str) -> tuple[Path, str] | None:
+    """Resolve an entry id before deriving its stored logo path."""
+    entry = get_custom_cli(entry_id)
+    return logo_file_for_entry(entry) if entry is not None else None
 
 
 def logo_url(entry: CustomCli) -> str:
@@ -581,6 +586,7 @@ __all__ = [
     "list_custom_clis",
     "logo_dir",
     "logo_file",
+    "logo_file_for_entry",
     "logo_url",
     "needs_shell",
     "revision",

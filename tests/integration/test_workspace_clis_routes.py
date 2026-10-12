@@ -151,6 +151,24 @@ def test_asking_for_a_logo_that_is_not_there(client: TestClient) -> None:
     assert client.get(f"/api/workspace-clis/{entry['id']}/logo").status_code == 404
 
 
+def test_logo_route_resolves_the_id_before_deriving_a_path(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entry = _create(client)
+    resolved: list[custom_clis.CustomCli] = []
+
+    def _logo_file_for_entry(value: custom_clis.CustomCli):
+        resolved.append(value)
+        return None
+
+    monkeypatch.setattr(custom_clis, "logo_file_for_entry", _logo_file_for_entry)
+
+    assert client.get(f"/api/workspace-clis/{entry['id']}/logo").status_code == 404
+    assert [value.id for value in resolved] == [entry["id"]]
+    assert client.get("/api/workspace-clis/untrusted-id/logo").status_code == 404
+    assert len(resolved) == 1
+
+
 def test_removing_a_logo_leaves_the_entry(client: TestClient) -> None:
     entry = _create(client)
     client.put(

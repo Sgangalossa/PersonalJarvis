@@ -238,7 +238,11 @@ def get_logo(cli_id: str) -> FileResponse:
     that door for both. ``X-Content-Type-Options: nosniff`` so a browser that
     disagrees with our media type does not go looking for a better one.
     """
-    found = custom_clis.logo_file(cli_id)
+    # Resolve the untrusted route parameter to a stored entry before deriving
+    # any filesystem path.  The persisted id is still containment-checked by
+    # ``logo_file_for_entry`` because the JSON store is user-editable.
+    entry = custom_clis.get_custom_cli(cli_id)
+    found = custom_clis.logo_file_for_entry(entry) if entry is not None else None
     if found is None:
         raise HTTPException(status_code=404, detail="This CLI has no logo.")
     path, media_type = found
