@@ -191,6 +191,27 @@ class Worker:
                         type(detach_exc).__name__,
                     )
 
+    async def degrade_failed_native_capture(self) -> bool:
+        """Release failed macOS capture so the existing page stream can resume."""
+        native = self.native
+        if sys.platform != "darwin" or native is None or not native.failed:
+            return False
+        self.native = None
+        self.native_replay = False
+        self.native_frame_at = 0.0
+        self.latest = None
+        try:
+            await asyncio.to_thread(native.close)
+        except Exception as close_exc:
+            logging.getLogger(__name__).debug(
+                "Failed macOS Chrome capture cleanup failed (%s)",
+                type(close_exc).__name__,
+            )
+        logging.getLogger(__name__).warning(
+            "Native macOS Chrome capture stopped; using page stream"
+        )
+        return True
+
     async def rpc(self, kind: str, payload: dict) -> dict:
         key = uuid.uuid4().hex
         future = asyncio.get_running_loop().create_future()
@@ -508,9 +529,10 @@ class Worker:
             except Exception as exc:
                 emit("warning", error=f"Browser stream: {type(exc).__name__}")
                 if self.native and self.native.failed:
-                    emit("fatal", error="The Chrome window closed or its capture stopped")
-                    self.closed = True
-                    return
+                    if not await self.degrade_failed_native_capture():
+                        emit("fatal", error="The Chrome window closed or its capture stopped")
+                        self.closed = True
+                        return
                 self.target = ""
                 await asyncio.sleep(1)
             await asyncio.sleep(0.5)
@@ -559,9 +581,11 @@ class Worker:
                 self.target = ""
                 await asyncio.sleep(1)
             if self.native and self.native.failed:
-                emit("fatal", error="The Chrome window closed or its capture stopped")
-                self.closed = True
-                return
+                if not await self.degrade_failed_native_capture():
+                    emit("fatal", error="The Chrome window closed or its capture stopped")
+                    self.closed = True
+                    return
+                self.target = ""
             await asyncio.sleep(1 / 15)
 
     async def run(self, args: dict) -> dict:

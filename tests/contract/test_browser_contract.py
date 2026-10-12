@@ -133,6 +133,26 @@ async def test_macos_native_discovery_failure_detaches_and_uses_page_stream(monk
     assert detached == [True]
 
 
+async def test_macos_failed_native_stream_closes_and_allows_page_recovery(monkeypatch):
+    from jarvis.society.browser import live_runner
+
+    closed = []
+    worker = live_runner.Worker()
+    worker.native = SimpleNamespace(failed=True, close=lambda: closed.append(True))
+    worker.native_replay = True
+    worker.native_frame_at = 123.0
+    worker.latest = {"data": "stale"}
+    monkeypatch.setattr(live_runner.sys, "platform", "darwin")
+
+    assert await worker.degrade_failed_native_capture() is True
+    assert worker.native is None
+    assert worker.native_replay is False
+    assert worker.native_frame_at == 0.0
+    assert worker.latest is None
+    assert worker.closed is False
+    assert closed == [True]
+
+
 def test_add_menu_names_the_browser_as_chrome():
     from jarvis.agent_chat.tool_catalog import build_catalog, keyword_rank
 
