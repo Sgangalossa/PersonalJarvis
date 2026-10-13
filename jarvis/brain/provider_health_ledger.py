@@ -58,7 +58,6 @@ nothing else (AP-9). Nothing initialises at import time (AP-26).
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import os
@@ -197,17 +196,20 @@ def credential_fingerprint(credential: str | None) -> str:
     """
     if not credential:
         return ""
-    # Derive a fixed-size subkey first because BLAKE2 keys are length-bounded
-    # while control-key backends may change their serialized representation.
-    install_key = hashlib.blake2b(
-        _fingerprint_key(), digest_size=32, person=b"jarvis-hlth-key"
-    ).digest()
-    return hashlib.blake2b(
-        credential.encode("utf-8"),
-        key=install_key,
-        digest_size=8,
-        person=b"jarvis-health-v2",
-    ).hexdigest()
+    # Treat the credential as keying material, not as a password to hash. HKDF
+    # binds the pseudonym to this installation's secret salt and gives us the
+    # stable, non-reversible comparison token the ledger needs. Keeping this on
+    # the KDF API also prevents future refactors from accidentally persisting a
+    # bare fast hash of the credential.
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+    return HKDF(
+        algorithm=hashes.SHA256(),
+        length=8,
+        salt=_fingerprint_key(),
+        info=b"jarvis-provider-health-v3",
+    ).derive(credential.encode("utf-8")).hex()
 
 
 @dataclass(frozen=True, slots=True)
