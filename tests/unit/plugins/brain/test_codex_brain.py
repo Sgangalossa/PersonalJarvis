@@ -358,6 +358,34 @@ async def test_no_oauth_means_the_account_error_is_surfaced(
     assert calls == []
 
 
+@pytest.mark.asyncio
+async def test_no_api_key_log_does_not_expose_oauth_probe_result(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    brain = CodexBrain()
+    sensitive_probe = "oauth-secret-must-not-reach-logs"
+    monkeypatch.setattr(CodexBrain, "_api_key", lambda self: None)
+    monkeypatch.setattr(
+        codex_module,
+        "_codex_oauth_connected",
+        lambda: sensitive_probe,
+    )
+
+    async def _fake_cli(self: CodexBrain, req: BrainRequest):
+        yield BrainDelta(content="cli-answer")
+        yield BrainDelta(finish_reason="stop")
+
+    monkeypatch.setattr(CodexBrain, "_complete_via_cli", _fake_cli)
+    caplog.set_level("INFO", logger="jarvis.plugins.brain.codex")
+
+    answer = await _collect(brain.complete(_wiki_request()))
+
+    assert answer == "cli-answer"
+    assert "OAuth probe completed" in caplog.text
+    assert sensitive_probe not in caplog.text
+
+
 def test_cli_timeout_defaults_to_the_voice_tier_cap() -> None:
     assert CodexBrain()._cli_timeout_s == codex_module._CLI_TIMEOUT_S
 
