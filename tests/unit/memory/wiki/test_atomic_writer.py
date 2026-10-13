@@ -714,7 +714,10 @@ def test_writer_uses_provided_backup_manager(
 
 
 def test_body_with_api_key_is_blocked(
-    writer: AtomicWriter, vault_root: Path, fake_repo: FakePageRepository
+    writer: AtomicWriter,
+    vault_root: Path,
+    fake_repo: FakePageRepository,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A create whose body carries an API-key shape is refused at write time.
 
@@ -735,6 +738,7 @@ def test_body_with_api_key_is_blocked(
         new_body=secret_body,
         reason="should be blocked",
     )
+    caplog.set_level("WARNING", logger="jarvis.memory.wiki.atomic_writer")
 
     result = asyncio.run(writer.apply([update], repo=fake_repo))
 
@@ -747,6 +751,11 @@ def test_body_with_api_key_is_blocked(
     assert result.backup_path == Path()
     # Telemetry counter advanced by exactly one.
     assert telemetry.get("wiki_writes_blocked_pii") == before + 1
+    # Diagnostics keep both the credential and its target path private.
+    assert "atomic_writer: refusing write because body matched secret/PII policy" in caplog.text
+    assert "sk-proj-AbCdEf0123456789AbCdEf0123456789" not in caplog.text
+    assert str(target.resolve()) not in caplog.text
+    assert "leaky.md" not in caplog.text
 
 
 def test_clean_body_passes_the_guard(
