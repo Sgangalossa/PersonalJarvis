@@ -685,28 +685,23 @@ async def import_skill(body: SkillImportBody, request: Request) -> dict[str, Any
 
     import httpx
 
-    from jarvis.core.http_guard import public_only_async
+    from jarvis.core.http_guard import fetch_public_text_async
 
     reg = _require_registry(request)
     raw_url = _extract_import_url(body.input)
 
-    # The download runs server-side, so the pasted link (and every redirect it
-    # takes) must not reach the loopback API, the LAN or a metadata endpoint.
-    async with httpx.AsyncClient(
-        follow_redirects=True,
-        timeout=httpx.Timeout(20.0),
-        **public_only_async(schemes=("http", "https")),
-    ) as client:
-        try:
-            resp = await client.get(raw_url)
-            resp.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail="Download failed; verify the URL and try again.",
-            ) from exc
-
-    content = resp.text
+    # Resolve, validate and pin every hop.  A preflight-only lookup is not
+    # enough: an attacker can rebind DNS between validation and connection.
+    try:
+        content = await fetch_public_text_async(
+            raw_url,
+            schemes=("http", "https"),
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Download failed; verify the URL and try again.",
+        ) from exc
     if "---" not in content[:200]:
         raise HTTPException(
             status_code=400,

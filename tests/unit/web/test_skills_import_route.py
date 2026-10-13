@@ -8,6 +8,7 @@ content. Worse, the remote file can *declare itself* `state: active`.
 Both paths are pinned here: whatever the remote says, the stored skill is a
 draft, and promotion stays an explicit human act.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -38,29 +39,11 @@ _SELF_DECLARED_ACTIVE = (
 )
 
 
-class _Response:
-    def __init__(self, text: str) -> None:
-        self.text = text
+def _fetch_returning(payload: str):
+    async def _fetch(_url: str, **_kwargs: object) -> str:
+        return payload
 
-    def raise_for_status(self) -> None:
-        return None
-
-
-def _client_returning(payload: str):
-    class _Client:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            pass
-
-        async def __aenter__(self) -> _Client:
-            return self
-
-        async def __aexit__(self, *args: object) -> bool:
-            return False
-
-        async def get(self, _url: str) -> _Response:
-            return _Response(payload)
-
-    return _Client
+    return _fetch
 
 
 class _Registry:
@@ -74,18 +57,14 @@ class _Registry:
 
 
 def _request(registry: _Registry) -> SimpleNamespace:
-    return SimpleNamespace(
-        app=SimpleNamespace(state=SimpleNamespace(skill_registry=registry))
-    )
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(skill_registry=registry)))
 
 
 async def _import(payload: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("httpx.AsyncClient", _client_returning(payload))
+    monkeypatch.setattr("jarvis.core.http_guard.fetch_public_text_async", _fetch_returning(payload))
     monkeypatch.setattr(routes, "user_skills_dir", lambda: tmp_path)
     registry = _Registry()
-    body = routes.SkillImportBody(
-        input="https://example.invalid/skills/remote-skill/SKILL.md"
-    )
+    body = routes.SkillImportBody(input="https://example.invalid/skills/remote-skill/SKILL.md")
     detail = await routes.import_skill(body, _request(registry))
     stored = tmp_path / "remote-skill" / "SKILL.md"
     frontmatter = yaml.safe_load(stored.read_text(encoding="utf-8").split("---", 2)[1])
@@ -114,11 +93,11 @@ async def test_import_cannot_self_declare_active(
 
 
 @pytest.mark.asyncio
-async def test_import_preserves_the_body(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_import_preserves_the_body(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Stamping the state must not disturb the rest of the file."""
-    monkeypatch.setattr("httpx.AsyncClient", _client_returning(_NO_STATE))
+    monkeypatch.setattr(
+        "jarvis.core.http_guard.fetch_public_text_async", _fetch_returning(_NO_STATE)
+    )
     monkeypatch.setattr(routes, "user_skills_dir", lambda: tmp_path)
 
     body = routes.SkillImportBody(input="https://example.invalid/SKILL.md")
@@ -168,7 +147,7 @@ async def test_import_refuses_a_traversal_name(
     outside the skills root.
     """
     payload = _NO_STATE.replace("name: remote-skill", 'name: "../../evil"')
-    monkeypatch.setattr("httpx.AsyncClient", _client_returning(payload))
+    monkeypatch.setattr("jarvis.core.http_guard.fetch_public_text_async", _fetch_returning(payload))
     skills_root = tmp_path / "skills-root"
     skills_root.mkdir()
     monkeypatch.setattr(routes, "user_skills_dir", lambda: skills_root)
