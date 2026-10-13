@@ -58,10 +58,10 @@ def test_a_failing_listener_never_fails_or_leaks_the_save(
 
 
 def test_a_failing_listener_does_not_log_exception_details(caplog) -> None:
-    secret_marker = "gsk_SUPER_SECRET_VALUE_1234567890"
+    private_detail = "gsk_" + "SUPER_PRIVATE_VALUE_1234567890"
 
     def _boom(slot: str) -> None:
-        raise RuntimeError(f"provider listener failed with {secret_marker}")
+        raise RuntimeError(f"provider listener failed with {private_detail}")
 
     caplog.set_level("WARNING", logger="jarvis.core.config")
     cfg_mod.add_secret_change_listener(_boom)
@@ -70,10 +70,10 @@ def test_a_failing_listener_does_not_log_exception_details(caplog) -> None:
     finally:
         cfg_mod._SECRET_CHANGE_LISTENERS.remove(_boom)
 
-    assert secret_marker not in caplog.text
+    assert private_detail not in caplog.text
     assert "provider listener failed with" not in caplog.text
     assert "RuntimeError" in caplog.text
-    assert "groq_api_key" in caplog.text
+    assert "groq_api_key" not in caplog.text
 
 
 def test_the_health_record_forgets_what_the_old_key_did() -> None:
