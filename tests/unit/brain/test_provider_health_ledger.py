@@ -291,6 +291,16 @@ def test_the_fingerprint_is_not_the_key() -> None:
     assert ledger.credential_fingerprint("") == ""
 
 
+def test_the_fingerprint_is_bound_to_the_installation_key(monkeypatch) -> None:
+    monkeypatch.setattr(ledger, "_fingerprint_key", lambda: b"a" * 32)
+    first_install = ledger.credential_fingerprint("sk-same-credential")
+
+    monkeypatch.setattr(ledger, "_fingerprint_key", lambda: b"b" * 32)
+    second_install = ledger.credential_fingerprint("sk-same-credential")
+
+    assert first_install != second_install
+
+
 # ── listeners ────────────────────────────────────────────────────────────────
 
 
