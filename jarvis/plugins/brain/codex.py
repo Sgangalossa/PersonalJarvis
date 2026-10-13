@@ -819,10 +819,11 @@ class CodexBrain:
         # to_thread: the probe shells out to `codex --version` on its first
         # call per process (up to ~4s) — never block the event loop for it.
         oauth = await asyncio.to_thread(_codex_oauth_connected)
+        # Authentication probe results are deliberately not interpolated:
+        # even booleans derived from credential state are sensitive metadata.
         log.info(
-            "CodexBrain.complete: no API key — oauth=%s, %d tool(s) requested "
-            "(ignored on the CLI path)",
-            oauth,
+            "CodexBrain.complete: no API key; OAuth probe completed, "
+            "%d tool(s) requested (ignored on the CLI path)",
             len(req.tools or ()),
         )
         if oauth:
