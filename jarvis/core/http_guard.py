@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import socket
+from collections.abc import Mapping
 from typing import Any
 
 import httpx
@@ -41,6 +42,7 @@ __all__ = [
     "https_only",
     "https_only_async",
     "public_only_async",
+    "request_public_async",
 ]
 
 
@@ -177,13 +179,43 @@ async def fetch_public_text_async(
     original host remains in ``Host`` and TLS SNI for certificate validation
     and virtual hosting.  Redirects repeat the validation and pinning.
     """
+    response = await request_public_async(
+        url,
+        schemes=schemes,
+        request_timeout=request_timeout,
+        follow_redirects=True,
+        max_redirects=max_redirects,
+        transport=transport,
+    )
+    response.raise_for_status()
+    if len(response.content) > max_bytes:
+        raise BlockedDestination(f"response exceeds {max_bytes} bytes")
+    return response.text
+
+
+async def request_public_async(
+    url: str,
+    *,
+    schemes: tuple[str, ...] = ("https",),
+    headers: Mapping[str, str] | None = None,
+    request_timeout: float = 20.0,
+    follow_redirects: bool = False,
+    max_redirects: int = 5,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> httpx.Response:
+    """GET through a public IP resolved and validated exactly once per hop.
+
+    The request URL may contain user-provided path data, but its connection is
+    pinned to a globally routable address. Environment proxies cannot replace
+    that target. Redirects are opt-in and, when enabled, each hop is rechecked.
+    """
     allowed = frozenset(item.lower() for item in schemes)
     try:
         target = httpx.URL(url)
     except httpx.InvalidURL as exc:
         raise BlockedDestination("refusing an invalid URL") from exc
     # Environment proxies would replace the exact validated connection target,
-    # defeating DNS pinning.  Skill imports therefore connect directly.
+    # defeating DNS pinning. Public validation therefore connects directly.
     async with httpx.AsyncClient(
         timeout=request_timeout,
         transport=transport,
@@ -201,10 +233,14 @@ async def fetch_public_text_async(
                 if target.port in (None, default_port)
                 else f"{authority_host}:{target.port}"
             )
-            request = client.build_request("GET", pinned, headers={"host": authority})
+            request_headers = dict(headers or {})
+            request_headers["host"] = authority
+            request = client.build_request("GET", pinned, headers=request_headers)
             request.extensions["sni_hostname"] = host
             response = await client.send(request, follow_redirects=False)
             if response.has_redirect_location:
+                if not follow_redirects:
+                    return response
                 if redirect_count == max_redirects:
                     raise BlockedDestination("too many redirects")
                 location = response.headers.get("location")
@@ -212,11 +248,8 @@ async def fetch_public_text_async(
                     raise BlockedDestination("redirect without a location")
                 target = target.join(location)
                 continue
-            response.raise_for_status()
-            if len(response.content) > max_bytes:
-                raise BlockedDestination(f"response exceeds {max_bytes} bytes")
-            return response.text
-    raise BlockedDestination("download did not produce a response")
+            return response
+    raise BlockedDestination("request did not produce a response")
 
 
 def public_only_async(*, schemes: tuple[str, ...] = ("https",)) -> dict[str, Any]:

@@ -20,6 +20,7 @@ from jarvis.core.http_guard import (
     https_only,
     https_only_async,
     public_only_async,
+    request_public_async,
 )
 
 
@@ -209,3 +210,23 @@ async def test_public_fetch_bounds_response_size() -> None:
 async def test_public_fetch_refuses_url_credentials() -> None:
     with pytest.raises(BlockedDestination):
         await fetch_public_text_async("https://user:secret@8.8.8.8/SKILL.md")
+
+
+@pytest.mark.asyncio
+async def test_public_request_does_not_follow_redirect_or_drop_headers() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(302, headers={"location": "http://127.0.0.1/secret"})
+
+    response = await request_public_async(
+        "https://8.8.8.8/bot-token/getMe",
+        headers={"user-agent": "Personal-Jarvis/1.0"},
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert response.status_code == 302
+    assert len(seen) == 1
+    assert seen[0].url.host == "8.8.8.8"
+    assert seen[0].headers["user-agent"] == "Personal-Jarvis/1.0"

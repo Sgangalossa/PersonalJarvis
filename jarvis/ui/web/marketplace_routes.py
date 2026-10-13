@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from fastapi import (
@@ -42,7 +43,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from jarvis.core.events import MarketplaceItemInstalled
-from jarvis.core.http_guard import https_only_async
+from jarvis.core.http_guard import https_only_async, request_public_async
 from jarvis.core.process_utils import resolve_executable
 from jarvis.core.uploads import UploadRejected, stage_upload
 from jarvis.marketplace.auth import (
@@ -273,9 +274,16 @@ def _make_validator(transport: httpx.AsyncBaseTransport | None = None):
     ) -> tuple[bool, int]:
         scheme = getattr(auth, "auth_scheme", "bearer")
         headers = {"User-Agent": "Personal-Jarvis/1.0"}
+        telegram_url: str | None = None
         if scheme == "telegram_path":
             # Telegram puts the token in the URL path, no auth header.
-            url = auth.validation_endpoint.replace("{token}", token)
+            # Encode delimiters from the pasted value, then pin the connection
+            # to a validated public address below. The token cannot replace the
+            # destination authority or escape through a DNS rebind.
+            telegram_url = auth.validation_endpoint.replace(
+                "{token}", quote(token, safe=":")
+            )
+            url = auth.validation_endpoint
         elif scheme == "bot":
             url = auth.validation_endpoint
             headers["Authorization"] = f"Bot {token}"
@@ -293,6 +301,12 @@ def _make_validator(transport: httpx.AsyncBaseTransport | None = None):
             resp = await get_instance_destination(
                 instance_url,
                 auth.instance_url.validation_path,
+                headers=headers,
+                transport=transport,
+            )
+        elif telegram_url is not None:
+            resp = await request_public_async(
+                telegram_url,
                 headers=headers,
                 transport=transport,
             )

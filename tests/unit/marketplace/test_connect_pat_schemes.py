@@ -7,6 +7,7 @@
 import httpx
 import pytest
 
+from jarvis.core import http_guard
 from jarvis.marketplace import instance_url as instance_urls
 from jarvis.marketplace.catalog import InstanceUrlSpec, PatPasteAuth, PluginSpec
 from jarvis.marketplace.instance_url import InstanceUrlError
@@ -35,6 +36,8 @@ def _capture_transport(captured, *, body=None, status=200):
     async def handler(request: httpx.Request) -> httpx.Response:
         captured["url"] = str(request.url)
         captured["auth"] = request.headers.get("authorization")
+        captured["host"] = request.headers.get("host")
+        captured["sni"] = request.extensions.get("sni_hostname")
         return httpx.Response(status, json=body if body is not None else {"ok": True})
 
     return httpx.MockTransport(handler)
@@ -62,7 +65,11 @@ async def test_bot_scheme_uses_bot_header():
 
 
 @pytest.mark.asyncio
-async def test_telegram_path_splices_token_and_sends_no_header():
+async def test_telegram_path_splices_token_and_sends_no_header(monkeypatch):
+    async def public_answer(_url, _schemes):
+        return ("149.154.167.220",)
+
+    monkeypatch.setattr(http_guard, "_public_addresses", public_answer)
     captured = {}
     validate = mr._make_validator(
         _capture_transport(captured, body={"ok": True})
@@ -77,7 +84,35 @@ async def test_telegram_path_splices_token_and_sends_no_header():
 
 
 @pytest.mark.asyncio
-async def test_telegram_path_rejects_ok_false_even_on_200():
+async def test_telegram_path_cannot_replace_the_fixed_public_authority(monkeypatch):
+    async def public_answer(_url, _schemes):
+        return ("149.154.167.220",)
+
+    monkeypatch.setattr(http_guard, "_public_addresses", public_answer)
+    captured = {}
+    validate = mr._make_validator(
+        _capture_transport(captured, body={"ok": True})
+    )
+
+    ok, _ = await validate(
+        _spec("telegram_path", "https://api.telegram.org/bot{token}/getMe").auth,
+        "123:ABC/../../?next=http://127.0.0.1",
+    )
+
+    assert ok is True
+    assert captured["url"].startswith(
+        "https://149.154.167.220/bot123:ABC%2F..%2F..%2F%3F"
+    )
+    assert captured["host"] == "api.telegram.org"
+    assert captured["sni"] == "api.telegram.org"
+
+
+@pytest.mark.asyncio
+async def test_telegram_path_rejects_ok_false_even_on_200(monkeypatch):
+    async def public_answer(_url, _schemes):
+        return ("149.154.167.220",)
+
+    monkeypatch.setattr(http_guard, "_public_addresses", public_answer)
     captured = {}
     validate = mr._make_validator(
         _capture_transport(captured, body={"ok": False, "error_code": 401})
