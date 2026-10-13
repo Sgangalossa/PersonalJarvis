@@ -1,8 +1,10 @@
 """Unit tests for the cross-platform open/reveal helpers (per-OS argv + no-op)."""
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
 import jarvis.platform.open_path as op
@@ -34,7 +36,7 @@ def test_open_file_uses_qt_desktop_service():
     with patch.object(op, "detect_capabilities", return_value=_caps()), \
          patch.object(op, "_desktop_services_open", return_value=True) as desktop_open:
         assert op.open_file(Path("/x/y.md")) is True
-    desktop_open.assert_called_once_with("/x/y.md")
+    desktop_open.assert_called_once_with(Path(os.path.abspath("/x/y.md")).as_posix())
 
 
 def test_open_file_makes_option_like_relative_path_absolute():
@@ -47,15 +49,37 @@ def test_open_file_makes_option_like_relative_path_absolute():
 
 
 def test_desktop_services_open_builds_a_local_file_url():
-    from PySide6.QtGui import QDesktopServices
-
     seen = []
 
-    def accept(url):
-        seen.append(url)
-        return True
+    class FakeQUrl:
+        def __init__(self, path: str) -> None:
+            self._path = path
 
-    with patch.object(QDesktopServices, "openUrl", side_effect=accept):
+        @classmethod
+        def fromLocalFile(cls, path: str):
+            return cls(path)
+
+        def isLocalFile(self) -> bool:
+            return True
+
+        def toLocalFile(self) -> str:
+            return self._path
+
+    qt_core = ModuleType("PySide6.QtCore")
+    qt_core.QUrl = FakeQUrl  # type: ignore[attr-defined]
+    qt_gui = ModuleType("PySide6.QtGui")
+    qt_gui.QDesktopServices = SimpleNamespace(  # type: ignore[attr-defined]
+        openUrl=lambda url: seen.append(url) or True
+    )
+
+    with patch.dict(
+        sys.modules,
+        {
+            "PySide6": ModuleType("PySide6"),
+            "PySide6.QtCore": qt_core,
+            "PySide6.QtGui": qt_gui,
+        },
+    ):
         assert op._desktop_services_open("/x/report; touch injected.txt") is True
 
     assert len(seen) == 1
@@ -69,7 +93,7 @@ def test_open_file_keeps_shell_metacharacters_inside_one_path():
          patch.object(op, "_desktop_services_open", return_value=True) as desktop_open:
         assert op.open_file(path) is True
 
-    desktop_open.assert_called_once_with(path.as_posix())
+    desktop_open.assert_called_once_with(Path(os.path.abspath(path)).as_posix())
 
 
 def test_open_file_desktop_service_error_returns_false():
@@ -237,29 +261,29 @@ def test_open_url_linux_uses_xdg_open():
 
 
 def test_open_url_does_not_log_url_query_parameters(caplog):
-    secret_url = "https://accounts.google.com/oauth?state=private-state-token&code=private-code"
+    oauth_url = "https://accounts.google.com/oauth?state=private-state-token&code=private-code"
     with patch.object(op, "detect_capabilities", return_value=_caps()), \
          patch.object(op, "detect_platform", return_value="linux"), \
          patch.object(op.subprocess, "run", return_value=_ok()):
-        assert op.open_url(secret_url) is True
+        assert op.open_url(oauth_url) is True
 
     assert "private-state-token" not in caplog.text
     assert "private-code" not in caplog.text
-    assert secret_url not in caplog.text
+    assert oauth_url not in caplog.text
 
 
 def test_open_url_opener_timeout_does_not_log_url(caplog):
-    secret_url = "https://accounts.google.com/oauth?state=private-state-token&code=private-code"
-    timeout = op.subprocess.TimeoutExpired(cmd=["xdg-open", secret_url], timeout=8)
+    oauth_url = "https://accounts.google.com/oauth?state=private-state-token&code=private-code"
+    timeout = op.subprocess.TimeoutExpired(cmd=["xdg-open", oauth_url], timeout=8)
     with patch.object(op, "detect_capabilities", return_value=_caps()), \
          patch.object(op, "detect_platform", return_value="linux"), \
          patch.object(op.subprocess, "run", side_effect=timeout), \
          patch.object(op.shutil, "which", return_value=None):
-        assert op.open_url(secret_url) is False
+        assert op.open_url(oauth_url) is False
 
     assert "private-state-token" not in caplog.text
     assert "private-code" not in caplog.text
-    assert secret_url not in caplog.text
+    assert oauth_url not in caplog.text
 
 
 def test_open_url_linux_falls_back_to_browser_bin_when_xdg_open_fails():
