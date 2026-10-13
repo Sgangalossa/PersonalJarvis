@@ -58,7 +58,7 @@ nothing else (AP-9). Nothing initialises at import time (AP-26).
 from __future__ import annotations
 
 import asyncio
-import hmac
+import hashlib
 import json
 import logging
 import os
@@ -131,7 +131,6 @@ _REFRESH_WRITE_S = 15 * 60.0
 # forget a stale red verdict after restart, but never leaves an unkeyed digest
 # of an API credential on disk.
 _PROCESS_FINGERPRINT_KEY = secrets.token_bytes(32)
-_FINGERPRINT_CONTEXT = b"jarvis-provider-health-v2\x00"
 
 # Plugin names that differ from the provider-card id they belong to. The
 # OpenRouter speech plugin calls itself ``openrouter`` — the same id as the
@@ -198,12 +197,17 @@ def credential_fingerprint(credential: str | None) -> str:
     """
     if not credential:
         return ""
-    digest = hmac.digest(
-        _fingerprint_key(),
-        _FINGERPRINT_CONTEXT + credential.encode("utf-8"),
-        "sha256",
-    )
-    return digest.hex()[:16]
+    # Derive a fixed-size subkey first because BLAKE2 keys are length-bounded
+    # while control-key backends may change their serialized representation.
+    install_key = hashlib.blake2b(
+        _fingerprint_key(), digest_size=32, person=b"jarvis-hlth-key"
+    ).digest()
+    return hashlib.blake2b(
+        credential.encode("utf-8"),
+        key=install_key,
+        digest_size=8,
+        person=b"jarvis-health-v2",
+    ).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
