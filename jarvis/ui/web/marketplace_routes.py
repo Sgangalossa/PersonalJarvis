@@ -75,7 +75,11 @@ from jarvis.marketplace.discord_connect import (
     on_discord_connected,
     on_discord_disconnected,
 )
-from jarvis.marketplace.instance_url import InstanceUrlError, normalize_instance_url
+from jarvis.marketplace.instance_url import (
+    InstanceUrlError,
+    normalize_instance_url,
+    validate_instance_destination,
+)
 from jarvis.marketplace.revoke import revoke_tokens
 from jarvis.marketplace.telegram_connect import (
     on_telegram_connected,
@@ -283,8 +287,11 @@ def _make_validator(transport: httpx.AsyncBaseTransport | None = None):
             headers["Authorization"] = f"Bearer {token}"
         if auth.instance_url is not None and instance_url:
             # Self-hosted: the catalog cannot know the address, so validation
-            # goes to the user's own server instead of a fixed endpoint.
-            url = normalize_instance_url(instance_url) + auth.instance_url.validation_path
+            # goes to the user's own server instead of a fixed endpoint. LAN
+            # services are supported, but local-process, link-local/metadata
+            # and reserved destinations are rejected before the request.
+            safe_instance_url = await validate_instance_destination(instance_url)
+            url = safe_instance_url + auth.instance_url.validation_path
         async with httpx.AsyncClient(timeout=10.0, transport=transport) as client:
             resp = await client.get(url, headers=headers)
         if resp.status_code != 200:
@@ -512,6 +519,8 @@ async def connect_pat(plugin_id: str, body: PatConnectBody, request: Request) ->
             if instance_url
             else await _validate_token(pat, token)
         )
+    except InstanceUrlError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except httpx.HTTPError as exc:
         raise HTTPException(
             status_code=502,

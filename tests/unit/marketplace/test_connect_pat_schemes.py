@@ -7,7 +7,8 @@
 import httpx
 import pytest
 
-from jarvis.marketplace.catalog import PatPasteAuth, PluginSpec
+from jarvis.marketplace.catalog import InstanceUrlSpec, PatPasteAuth, PluginSpec
+from jarvis.marketplace.instance_url import InstanceUrlError
 from jarvis.ui.web import marketplace_routes as mr
 
 
@@ -20,7 +21,7 @@ def _spec(scheme: str, validation_endpoint: str) -> PluginSpec:
         logo_slug="x",
         auth=PatPasteAuth(
             mode="pat_paste",
-            token_creation_url="https://x",
+            token_creation_url="https://x",  # noqa: S106 -- URL field, not a token
             token_prefix="",
             validation_endpoint=validation_endpoint,
             instruction_md="md",
@@ -85,3 +86,26 @@ async def test_telegram_path_rejects_ok_false_even_on_200():
         "bad",
     )
     assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_self_hosted_validation_blocks_local_process_targets_before_http() -> None:
+    async def must_not_send(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("blocked destination reached the HTTP transport")
+
+    auth = PatPasteAuth(
+        mode="pat_paste",
+        token_creation_url="https://example.test/tokens",  # noqa: S106 -- URL field
+        token_prefix="",
+        validation_endpoint="https://unused.example.test/me",
+        instruction_md="md",
+        instance_url=InstanceUrlSpec(
+            label="Server",
+            placeholder="http://server.local:8123",
+            validation_path="/api/",
+        ),
+    )
+    validate = mr._make_validator(httpx.MockTransport(must_not_send))
+
+    with pytest.raises(InstanceUrlError, match="blocked system"):
+        await validate(auth, "token", "http://127.0.0.1:8123")
