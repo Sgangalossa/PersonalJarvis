@@ -30,74 +30,65 @@ def _caps(display: bool = True) -> Capabilities:
     )
 
 
-def test_open_file_linux_uses_xdg_open():
+def test_open_file_uses_qt_desktop_service():
     with patch.object(op, "detect_capabilities", return_value=_caps()), \
-         patch.object(op, "detect_platform", return_value="linux"), \
-         patch.object(op.subprocess, "Popen") as popen:
+         patch.object(op, "_desktop_services_open", return_value=True) as desktop_open:
         assert op.open_file(Path("/x/y.md")) is True
-        argv = popen.call_args.args[0]
-        assert argv[0] == "xdg-open"
-        assert argv[1] == Path(op.os.path.abspath("/x/y.md")).as_posix()
+    desktop_open.assert_called_once_with("/x/y.md")
 
 
-def test_open_file_linux_makes_option_like_relative_path_absolute():
+def test_open_file_makes_option_like_relative_path_absolute():
     with patch.object(op, "detect_capabilities", return_value=_caps()), \
-         patch.object(op, "detect_platform", return_value="linux"), \
-         patch.object(op.subprocess, "Popen") as popen:
+         patch.object(op, "_desktop_services_open", return_value=True) as desktop_open:
         assert op.open_file(Path("--help")) is True
-        argv = popen.call_args.args[0]
-        assert argv[0] == "xdg-open"
-        assert argv[1] == Path(op.os.path.abspath("--help")).as_posix()
-        assert not argv[1].startswith("-")
+    opened = desktop_open.call_args.args[0]
+    assert Path(opened).is_absolute()
+    assert Path(opened).name == "--help"
 
 
-def test_open_file_keeps_shell_metacharacters_inside_one_absolute_argv_item():
-    # A path is a single data argument, never shell syntax; subprocess must
-    # continue receiving an argv list with shell=False.
-    path = Path("/tmp/report; touch injected.txt")
+def test_desktop_services_open_builds_a_local_file_url():
+    from PySide6.QtGui import QDesktopServices
+
+    seen = []
+
+    def accept(url):
+        seen.append(url)
+        return True
+
+    with patch.object(QDesktopServices, "openUrl", side_effect=accept):
+        assert op._desktop_services_open("/x/report; touch injected.txt") is True
+
+    assert len(seen) == 1
+    assert seen[0].isLocalFile()
+    assert seen[0].toLocalFile() == "/x/report; touch injected.txt"
+
+
+def test_open_file_keeps_shell_metacharacters_inside_one_path():
+    path = Path("/x/report; touch injected.txt")
     with patch.object(op, "detect_capabilities", return_value=_caps()), \
-         patch.object(op, "detect_platform", return_value="linux"), \
-         patch.object(op.subprocess, "Popen") as popen:
+         patch.object(op, "_desktop_services_open", return_value=True) as desktop_open:
         assert op.open_file(path) is True
 
-    argv = popen.call_args.args[0]
-    assert argv == ["xdg-open", Path(op.os.path.abspath(str(path))).as_posix()]
-    assert popen.call_args.kwargs["shell"] is False
-    assert popen.call_args.kwargs["close_fds"] is True
+    desktop_open.assert_called_once_with(path.as_posix())
 
 
-def test_open_file_embedded_nul_returns_false_instead_of_raising():
-    def reject_embedded_nul(argv, **_kwargs):
-        assert "\x00" in argv[1]
-        raise ValueError("embedded null byte")
-
+def test_open_file_desktop_service_error_returns_false():
     with patch.object(op, "detect_capabilities", return_value=_caps()), \
-         patch.object(op, "detect_platform", return_value="linux"), \
-         patch.object(op.subprocess, "Popen", side_effect=reject_embedded_nul):
-        assert op.open_file(Path("/tmp/bad\x00name")) is False
+         patch.object(op, "_desktop_services_open", side_effect=ValueError("bad path")):
+        assert op.open_file(Path("/x/bad\x00name")) is False
 
 
-def test_open_file_darwin_uses_open():
+def test_open_file_returns_false_when_desktop_service_refuses():
     with patch.object(op, "detect_capabilities", return_value=_caps()), \
-         patch.object(op, "detect_platform", return_value="darwin"), \
-         patch.object(op.subprocess, "Popen") as popen:
-        assert op.open_file(Path("/x/y.md")) is True
-        assert popen.call_args.args[0][0] == "open"
-
-
-def test_open_file_windows_uses_startfile():
-    with patch.object(op, "detect_capabilities", return_value=_caps()), \
-         patch.object(op, "detect_platform", return_value="win32"), \
-         patch.object(op.os, "startfile", create=True) as startfile:
-        assert op.open_file(Path("C:/x/y.md")) is True
-        startfile.assert_called_once()
+         patch.object(op, "_desktop_services_open", return_value=False):
+        assert op.open_file(Path("/x/y.md")) is False
 
 
 def test_open_file_headless_is_noop():
     with patch.object(op, "detect_capabilities", return_value=_caps(display=False)), \
-         patch.object(op.subprocess, "Popen") as popen:
+         patch.object(op, "_desktop_services_open") as desktop_open:
         assert op.open_file(Path("/x/y.md")) is False
-        popen.assert_not_called()
+        desktop_open.assert_not_called()
 
 
 def test_reveal_linux_opens_parent_dir():

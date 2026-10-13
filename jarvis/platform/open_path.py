@@ -23,6 +23,14 @@ from jarvis.platform.capabilities import detect_capabilities
 log = logging.getLogger(__name__)
 
 
+def _desktop_services_open(path: str) -> bool:
+    """Ask Qt to open a local file without constructing a command line."""
+    from PySide6.QtCore import QUrl
+    from PySide6.QtGui import QDesktopServices
+
+    return bool(QDesktopServices.openUrl(QUrl.fromLocalFile(path)))
+
+
 def open_file(path: Path) -> bool:
     """Open *path* with the OS default application.
 
@@ -32,31 +40,16 @@ def open_file(path: Path) -> bool:
     if not detect_capabilities().display_present:
         log.info("open_file: no display present — skipping %s", path)
         return False
-    plat = detect_platform()
     try:
-        if plat == "win32":
-            # This helper intentionally opens the caller-selected file; no shell or command string is evaluated.
-            os.startfile(str(path))  # type: ignore[attr-defined]  # noqa: S606  # codeql[py/path-injection]
-            return True
-        # Normalize to an absolute path before passing it to a desktop opener.
-        # The path is intentionally the file selected by the caller; this helper
-        # does not read or write its contents. The absolute form prevents a
-        # relative filename beginning with '-' from being parsed as an option.
-        # codeql[py/path-injection]
+        # Use Qt's platform service instead of feeding a request-controlled path
+        # to a process launcher. Besides removing the command/option-injection
+        # surface, this keeps file association handling native on every desktop.
         path_str = Path(os.path.abspath(os.fspath(path))).as_posix()
-        cmd = ["open", path_str] if plat == "darwin" else ["xdg-open", path_str]
-        # The executable is selected from fixed literals above, ``shell=False``
-        # passes the path as one argv operand, and the absolute path cannot be
-        # parsed as an option. Tests pin this boundary against shell metacharacters.
-        # codeql[py/command-line-injection]
-        subprocess.Popen(
-            cmd,  # codeql[py/command-line-injection]
-            shell=False,
-            creationflags=NO_WINDOW_CREATIONFLAGS,
-            close_fds=True,
-        )
-        return True
-    except (OSError, ValueError) as exc:
+        if _desktop_services_open(path_str):
+            return True
+        log.warning("open_file failed: desktop service refused the request")
+        return False
+    except (ImportError, OSError, RuntimeError, TypeError, ValueError) as exc:
         log.warning("open_file failed (%s)", type(exc).__name__)
         return False
 
