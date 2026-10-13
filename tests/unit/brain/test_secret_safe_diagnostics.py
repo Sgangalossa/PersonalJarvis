@@ -9,6 +9,25 @@ from jarvis.brain.manager import BrainManager
 from jarvis.core.events import SecretConfigured
 
 
+def test_keyless_probe_implementation_logs_no_secret_or_provider_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from jarvis.brain import app_control
+
+    def _fail() -> bool:
+        raise RuntimeError("token=do-not-log-this")
+
+    monkeypatch.setattr(app_control.cfg_mod, "vertex_credential_configured", _fail)
+    caplog.set_level("DEBUG", logger="jarvis.brain.app_control")
+
+    assert not app_control._keyless_credential_present("vertex")
+    assert "Keyless credential probe failed" in caplog.text
+    assert "token=do-not-log-this" not in caplog.text
+    assert "vertex" not in caplog.text
+    assert "RuntimeError" not in caplog.text
+
+
 def test_keyless_probe_failure_logs_no_secret_tainted_metadata(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
