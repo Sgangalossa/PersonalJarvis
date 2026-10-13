@@ -5159,9 +5159,7 @@ def _mark_secret_changed(key: str) -> None:
             # or traceback into the application log.
             # `key` is only the credential-slot identifier, never its stored value.
             logging.getLogger(__name__).warning(
-                "secret-change listener %r failed for slot %s (%s)",
-                getattr(listener, "__qualname__", listener),
-                key,  # codeql[py/clear-text-logging-sensitive-data]
+                "secret-change listener failed (%s)",
                 type(exc).__name__,
             )
 

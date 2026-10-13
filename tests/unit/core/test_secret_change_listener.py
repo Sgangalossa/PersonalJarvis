@@ -7,6 +7,10 @@ keyed on "which keys exist") hangs off this one hook instead of each route.
 """
 from __future__ import annotations
 
+import logging
+
+import pytest
+
 from jarvis.core import config as cfg_mod
 
 
@@ -29,15 +33,28 @@ def test_a_changed_slot_reaches_every_listener_and_bumps_the_generation() -> Non
     assert cfg_mod.secret_revision("groq_api_key") >= 1
 
 
-def test_a_failing_listener_never_fails_the_save() -> None:
-    def _boom(slot: str) -> None:
-        raise RuntimeError("follower down")
+def test_a_failing_listener_never_fails_or_leaks_the_save(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _Boom:
+        def __call__(self, slot: str) -> None:
+            raise RuntimeError("exception-secret")
 
-    cfg_mod.add_secret_change_listener(_boom)
+        def __repr__(self) -> str:
+            return "listener-secret"
+
+    listener = _Boom()
+    cfg_mod.add_secret_change_listener(listener)
     try:
-        cfg_mod._mark_secret_changed("groq_api_key")  # must not raise
+        with caplog.at_level(logging.WARNING, logger="jarvis.core.config"):
+            cfg_mod._mark_secret_changed("slot-secret")  # must not raise
     finally:
-        cfg_mod._SECRET_CHANGE_LISTENERS.remove(_boom)
+        cfg_mod._SECRET_CHANGE_LISTENERS.remove(listener)
+
+    assert "RuntimeError" in caplog.text
+    assert "slot-secret" not in caplog.text
+    assert "listener-secret" not in caplog.text
+    assert "exception-secret" not in caplog.text
 
 
 def test_a_failing_listener_does_not_log_exception_details(caplog) -> None:
