@@ -15,7 +15,10 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import socket
+from collections.abc import Mapping
 from urllib.parse import urlsplit, urlunsplit
+
+import httpx
 
 # A plain hostname without a scheme is far more likely to be a LAN box reached
 # over http than a public https host, but guessing wrong costs a confusing
@@ -116,7 +119,7 @@ def normalize_instance_url(raw: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, "", "", "")).rstrip("/")
 
 
-async def validate_instance_destination(raw: str) -> str:
+async def _validated_instance_destination(raw: str) -> tuple[str, tuple[str, ...]]:
     """Normalize and reject sensitive system destinations before validation.
 
     Self-hosted plugins must be able to reach private LAN/ULA addresses, so a
@@ -142,10 +145,61 @@ async def validate_instance_destination(raw: str) -> str:
             raise InstanceUrlError("address contains an invalid IP address") from exc
         if not literal_safe:
             raise InstanceUrlError("address targets a blocked system network")
-        return normalized
+        return normalized, (host,)
 
     port = parts.port or (443 if parts.scheme == "https" else 80)
     addresses = await _resolve_addresses(host, port)
     if not addresses or not all(_safe_service_address(address) for address in addresses):
         raise InstanceUrlError("address resolves to a blocked system network")
+    ordered = tuple(sorted(addresses, key=lambda value: int(ipaddress.ip_address(value))))
+    return normalized, ordered
+
+
+async def validate_instance_destination(raw: str) -> str:
+    """Normalize and validate a self-hosted destination without connecting."""
+    normalized, _addresses = await _validated_instance_destination(raw)
     return normalized
+
+
+async def get_instance_destination(
+    raw: str,
+    path: str,
+    *,
+    headers: Mapping[str, str] | None = None,
+    request_timeout: float = 10.0,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> httpx.Response:
+    """GET a self-hosted endpoint through one already-validated address.
+
+    Checking DNS before a normal ``httpx`` request is insufficient: the
+    transport resolves the hostname again, leaving a DNS-rebinding window.
+    Resolve once, reject every unsafe answer, and connect to one exact IP while
+    preserving the original authority for virtual hosting and TLS SNI.
+    """
+    normalized, addresses = await _validated_instance_destination(raw)
+    try:
+        target = httpx.URL(normalized).copy_with(path=path)
+    except httpx.InvalidURL as exc:
+        raise InstanceUrlError("address contains an invalid validation path") from exc
+
+    host = target.host
+    assert host is not None  # guaranteed by normalize_instance_url
+    pinned = target.copy_with(host=addresses[0])
+    default_port = 443 if target.scheme == "https" else 80
+    authority_host = f"[{host}]" if ":" in host else host
+    authority = (
+        authority_host if target.port in (None, default_port) else f"{authority_host}:{target.port}"
+    )
+    request_headers = dict(headers or {})
+    request_headers["host"] = authority
+
+    # A configured environment proxy would replace the validated connection
+    # target and defeat pinning, so self-hosted validation connects directly.
+    async with httpx.AsyncClient(
+        timeout=request_timeout,
+        transport=transport,
+        trust_env=False,
+    ) as client:
+        request = client.build_request("GET", pinned, headers=request_headers)
+        request.extensions["sni_hostname"] = host
+        return await client.send(request, follow_redirects=False)

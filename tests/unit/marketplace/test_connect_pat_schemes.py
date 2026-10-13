@@ -7,6 +7,7 @@
 import httpx
 import pytest
 
+from jarvis.marketplace import instance_url as instance_urls
 from jarvis.marketplace.catalog import InstanceUrlSpec, PatPasteAuth, PluginSpec
 from jarvis.marketplace.instance_url import InstanceUrlError
 from jarvis.ui.web import marketplace_routes as mr
@@ -109,3 +110,44 @@ async def test_self_hosted_validation_blocks_local_process_targets_before_http()
 
     with pytest.raises(InstanceUrlError, match="blocked system"):
         await validate(auth, "token", "http://127.0.0.1:8123")
+
+
+@pytest.mark.asyncio
+async def test_self_hosted_validation_pins_dns_and_preserves_authority(monkeypatch) -> None:
+    async def private_answer(_host: str, _port: int) -> set[str]:
+        return {"192.168.1.20"}
+
+    captured = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["host"] = request.headers.get("host")
+        captured["sni"] = request.extensions.get("sni_hostname")
+        captured["auth"] = request.headers.get("authorization")
+        return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(instance_urls, "_resolve_addresses", private_answer)
+    auth = PatPasteAuth(
+        mode="pat_paste",
+        token_creation_url="https://example.test/tokens",  # noqa: S106 -- URL field
+        token_prefix="",
+        validation_endpoint="https://unused.example.test/me",
+        instruction_md="md",
+        instance_url=InstanceUrlSpec(
+            label="Server",
+            placeholder="https://server.example:8443",
+            validation_path="/api/me",
+        ),
+    )
+
+    ok, status = await mr._make_validator(httpx.MockTransport(handler))(
+        auth, "token", "https://server.example:8443/dashboard"
+    )
+
+    assert ok is True and status == 200
+    assert captured == {
+        "url": "https://192.168.1.20:8443/api/me",
+        "host": "server.example:8443",
+        "sni": "server.example",
+        "auth": "Bearer token",
+    }

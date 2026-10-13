@@ -77,8 +77,8 @@ from jarvis.marketplace.discord_connect import (
 )
 from jarvis.marketplace.instance_url import (
     InstanceUrlError,
+    get_instance_destination,
     normalize_instance_url,
-    validate_instance_destination,
 )
 from jarvis.marketplace.revoke import revoke_tokens
 from jarvis.marketplace.telegram_connect import (
@@ -290,10 +290,15 @@ def _make_validator(transport: httpx.AsyncBaseTransport | None = None):
             # goes to the user's own server instead of a fixed endpoint. LAN
             # services are supported, but local-process, link-local/metadata
             # and reserved destinations are rejected before the request.
-            safe_instance_url = await validate_instance_destination(instance_url)
-            url = safe_instance_url + auth.instance_url.validation_path
-        async with httpx.AsyncClient(timeout=10.0, transport=transport) as client:
-            resp = await client.get(url, headers=headers)
+            resp = await get_instance_destination(
+                instance_url,
+                auth.instance_url.validation_path,
+                headers=headers,
+                transport=transport,
+            )
+        else:
+            async with httpx.AsyncClient(timeout=10.0, transport=transport) as client:
+                resp = await client.get(url, headers=headers)
         if resp.status_code != 200:
             return False, resp.status_code
         if scheme == "telegram_path":
