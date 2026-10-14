@@ -54,8 +54,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import logging
 import os
+import secrets
 import threading
 import time
 from dataclasses import dataclass, replace
@@ -107,11 +109,16 @@ _PROBE_TIMEOUT_S = 5.0
 
 _ROUTE_CACHE: dict[str, KeyRoute] = {}
 _CACHE_LOCK = threading.Lock()
+# Fingerprints only need process-local stability: a random HMAC key prevents
+# offline guessing if a short fingerprint ever appears in diagnostics.
+_FINGERPRINT_KEY = secrets.token_bytes(32)
 
 
 def _fingerprint(api_key: str) -> str:
-    """Non-reversible cache/log identity for a key (first 12 hex of SHA-256)."""
-    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:12]
+    """Return a process-local, non-reversible cache/log identity for a key."""
+    return hmac.new(
+        _FINGERPRINT_KEY, api_key.encode("utf-8"), hashlib.sha256
+    ).hexdigest()[:12]
 
 
 def classify_google_key(api_key: str) -> KeyRoute | None:
