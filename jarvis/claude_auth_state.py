@@ -30,6 +30,8 @@ next dead-auth mission). Monotonic clock so it is immune to wall-clock jumps;
 from __future__ import annotations
 
 import hashlib
+import hmac
+import secrets
 import threading
 import time
 from collections.abc import Callable
@@ -43,6 +45,9 @@ _DEFAULT_COOLDOWN_S: float = 15 * 60.0
 _lock = threading.Lock()
 _dead_until: float = 0.0  # monotonic deadline; 0.0 == not armed
 _dead_fingerprint: str | None = None
+# The fingerprint is compared only inside this process, so a per-process HMAC
+# key prevents offline guessing without changing cooldown semantics.
+_FINGERPRINT_KEY = secrets.token_bytes(32)
 
 
 def credential_fingerprint(credential: str | None) -> str | None:
@@ -52,7 +57,9 @@ def credential_fingerprint(credential: str | None) -> str | None:
     """
     if not credential:
         return None
-    return hashlib.sha256(credential.encode("utf-8")).hexdigest()[:16]
+    return hmac.new(
+        _FINGERPRINT_KEY, credential.encode("utf-8"), hashlib.sha256
+    ).hexdigest()[:16]
 
 
 def mark_claude_auth_dead(
