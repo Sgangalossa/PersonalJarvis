@@ -685,28 +685,23 @@ async def import_skill(body: SkillImportBody, request: Request) -> dict[str, Any
 
     import httpx
 
-    from jarvis.core.http_guard import public_only_async
+    from jarvis.core.http_guard import fetch_public_text_async
 
     reg = _require_registry(request)
     raw_url = _extract_import_url(body.input)
 
-    # The download runs server-side, so the pasted link (and every redirect it
-    # takes) must not reach the loopback API, the LAN or a metadata endpoint.
-    async with httpx.AsyncClient(
-        follow_redirects=True,
-        timeout=httpx.Timeout(20.0),
-        **public_only_async(schemes=("http", "https")),
-    ) as client:
-        try:
-            resp = await client.get(raw_url)
-            resp.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Download failed: {exc}",
-            ) from exc
-
-    content = resp.text
+    # Resolve, validate and pin every hop.  A preflight-only lookup is not
+    # enough: an attacker can rebind DNS between validation and connection.
+    try:
+        content = await fetch_public_text_async(
+            raw_url,
+            schemes=("http", "https"),
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Download failed; verify the URL and try again.",
+        ) from exc
     if "---" not in content[:200]:
         raise HTTPException(
             status_code=400,
@@ -760,7 +755,7 @@ async def import_skill(body: SkillImportBody, request: Request) -> dict[str, Any
     except OSError as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Could not write skill: {exc}",
+            detail="Could not write skill.",
         ) from exc
 
     installed = parse_skill(target_file)
@@ -780,7 +775,7 @@ def _import_skill_folder(path_str: str, reg: Any) -> tuple[str, list[str]]:
     try:
         src = src.resolve()
     except OSError as exc:
-        raise HTTPException(status_code=400, detail=f"Unreadable path: {exc}") from exc
+        raise HTTPException(status_code=400, detail="Unreadable path.") from exc
     folder = src.parent if src.name == "SKILL.md" else src
     skill_md = folder / "SKILL.md"
     if not skill_md.is_file():
@@ -843,7 +838,7 @@ def _import_skill_folder(path_str: str, reg: Any) -> tuple[str, list[str]]:
                 shutil.copytree(src_kind, target_dir / kind, dirs_exist_ok=True)
     except OSError as exc:
         raise HTTPException(
-            status_code=500, detail=f"Could not copy skill: {exc}"
+            status_code=500, detail="Could not copy skill."
         ) from exc
     return name, lint_findings
 
@@ -941,7 +936,7 @@ def _locate_skill_root(staged_root: Path) -> Path:
         except OSError as exc:
             raise HTTPException(
                 status_code=500,
-                detail=f"Could not normalize {found.name}: {exc}",
+                detail=f"Could not normalize {found.name}.",
             ) from exc
         found = renamed
     return found.parent
@@ -1419,7 +1414,7 @@ def _delete_user_skill(reg: Any, name: str) -> None:
         shutil.rmtree(target)
     except OSError as exc:
         raise HTTPException(
-            status_code=500, detail=f"Could not delete skill: {exc}"
+            status_code=500, detail="Could not delete skill."
         ) from exc
 
     reg._skills.pop(name, None)  # type: ignore[attr-defined]
@@ -1497,7 +1492,7 @@ def update_skill(
         tmp.replace(target)
     except OSError as exc:
         raise HTTPException(
-            status_code=500, detail=f"Could not write skill: {exc}"
+            status_code=500, detail="Could not write skill."
         ) from exc
 
     # Re-parse immediately + replace in the registry, so the response shows the
@@ -1742,7 +1737,7 @@ async def query_local_skills(
     try:
         hits, brain_used = await searcher.query(filters)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"Query failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail="Skill query failed.") from exc
 
     # Return the full summary for every hit, so the UI can render the same
     # objects as in the normal list (no separate sub-component for search
@@ -1811,7 +1806,7 @@ async def search_catalog(
     try:
         candidates = await finder.search(filters)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"Search failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail="Skill catalog search failed.") from exc
 
     return {
         "query": body.query,

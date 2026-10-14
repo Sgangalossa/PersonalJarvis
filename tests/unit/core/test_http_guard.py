@@ -8,15 +8,19 @@ second one.
 
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 import pytest
 
 from jarvis.core.http_guard import (
     BlockedDestination,
     InsecureRedirect,
+    fetch_public_text_async,
     https_only,
     https_only_async,
     public_only_async,
+    request_public_async,
 )
 
 
@@ -149,3 +153,80 @@ async def test_public_only_default_is_https_only() -> None:
     ) as client:
         with pytest.raises(BlockedDestination):
             await client.get("http://8.8.8.8/skill.md")
+
+
+@pytest.mark.asyncio
+async def test_public_fetch_pins_validated_address_and_preserves_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[httpx.Request] = []
+
+    async def resolve(*_args: object, **_kwargs: object) -> list[tuple[object, ...]]:
+        return [(2, 1, 6, "", ("93.184.216.34", 443))]
+
+    monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", resolve)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, text="skill")
+
+    text = await fetch_public_text_async(
+        "https://skills.example/SKILL.md",
+        transport=httpx.MockTransport(handler),
+    )
+    assert text == "skill"
+    assert seen[0].url.host == "93.184.216.34"
+    assert seen[0].headers["host"] == "skills.example"
+    assert seen[0].extensions["sni_hostname"] == "skills.example"
+
+
+@pytest.mark.asyncio
+async def test_public_fetch_revalidates_redirect_before_connecting() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"location": "http://127.0.0.1/secret"})
+
+    with pytest.raises(BlockedDestination):
+        await fetch_public_text_async(
+            "http://8.8.8.8/SKILL.md",
+            schemes=("http", "https"),
+            transport=httpx.MockTransport(handler),
+        )
+
+
+@pytest.mark.asyncio
+async def test_public_fetch_bounds_response_size() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"12345")
+
+    with pytest.raises(BlockedDestination):
+        await fetch_public_text_async(
+            "https://8.8.8.8/SKILL.md",
+            max_bytes=4,
+            transport=httpx.MockTransport(handler),
+        )
+
+
+@pytest.mark.asyncio
+async def test_public_fetch_refuses_url_credentials() -> None:
+    with pytest.raises(BlockedDestination):
+        await fetch_public_text_async("https://user:secret@8.8.8.8/SKILL.md")
+
+
+@pytest.mark.asyncio
+async def test_public_request_does_not_follow_redirect_or_drop_headers() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(302, headers={"location": "http://127.0.0.1/secret"})
+
+    response = await request_public_async(
+        "https://8.8.8.8/bot-token/getMe",
+        headers={"user-agent": "Personal-Jarvis/1.0"},
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert response.status_code == 302
+    assert len(seen) == 1
+    assert seen[0].url.host == "8.8.8.8"
+    assert seen[0].headers["user-agent"] == "Personal-Jarvis/1.0"

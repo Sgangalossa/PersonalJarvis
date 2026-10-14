@@ -38,6 +38,25 @@ class _HangingProcess:
         return 0  # pragma: no cover
 
 
+class _CancellableProcess:
+    def __init__(self) -> None:
+        self.killed = False
+        self.returncode: int | None = None
+        self.started = asyncio.Event()
+        self.communicate_calls = 0
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        self.communicate_calls += 1
+        self.started.set()
+        if not self.killed:
+            await asyncio.Event().wait()
+        self.returncode = -9
+        return b"", b""
+
+    def kill(self) -> None:
+        self.killed = True
+
+
 def _spec(name: str = "gh") -> CliSpec:
     return CliSpec(
         name=name,
@@ -120,3 +139,25 @@ async def test_probe_completes_end_to_end_when_both_stages_hang(
     status = await asyncio.wait_for(prober.probe(_spec()), timeout=2.0)
     assert status.installed is True
     assert status.auth_status == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_cancelled_binary_probe_kills_and_drains_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(prober_mod.shutil, "which", lambda _name: "/usr/bin/gh")
+    process = _CancellableProcess()
+
+    async def _fake_exec(*_args: Any, **_kwargs: Any) -> _CancellableProcess:
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_exec)
+    task = asyncio.create_task(CliStatusProber()._probe_binary(_spec()))
+    await process.started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert process.killed is True
+    assert process.communicate_calls == 2

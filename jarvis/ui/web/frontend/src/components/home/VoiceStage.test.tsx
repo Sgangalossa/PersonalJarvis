@@ -152,6 +152,10 @@ describe("VoiceStage transcript", () => {
     expect(screen.getByTestId("voice-stage").dataset.empty).toBe("true");
     expect(document.querySelector("[data-radix-scroll-area-viewport]")).toBeNull();
     expect(screen.getByTestId("jarvis-bar")).toBeTruthy();
+    expect(screen.getByText("PERSONAL INTELLIGENCE SYSTEM")).toBeTruthy();
+    expect(screen.getByText("SYSTEM NOMINAL")).toBeTruthy();
+    expect(screen.getByText("CORE")).toBeTruthy();
+    expect(screen.getByText("VOICE LINK")).toBeTruthy();
   });
 
   it("shows the words still being said under the finished ones", () => {

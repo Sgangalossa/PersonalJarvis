@@ -246,11 +246,11 @@ dependencies = [
 # These are the sidebar of the PyPI project page — for many visitors the first
 # and only place they meet the project, so every route out of it is listed.
 [project.urls]
-Homepage = "https://github.com/PersonalJarvis/PersonalJarvis"
-Repository = "https://github.com/PersonalJarvis/PersonalJarvis"
-Issues = "https://github.com/PersonalJarvis/PersonalJarvis/issues"
-Documentation = "https://github.com/PersonalJarvis/PersonalJarvis/blob/main/README.md"
-Changelog = "https://github.com/PersonalJarvis/PersonalJarvis/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/Dodaios/Dodaios"
+Repository = "https://github.com/Dodaios/Dodaios"
+Issues = "https://github.com/Dodaios/Dodaios/issues"
+Documentation = "https://github.com/Dodaios/Dodaios/blob/main/README.md"
+Changelog = "https://github.com/Dodaios/Dodaios/blob/main/CHANGELOG.md"
 Discord = "https://discord.gg/x7USduHxbc"
 
 [project.optional-dependencies]
@@ -611,13 +611,14 @@ vertex-live = "jarvis.plugins.realtime.gemini_live:VertexLiveProvider"
 local-realtime = "jarvis.plugins.realtime.openai_realtime:LocalRealtimeProvider"
 
 [project.entry-points."jarvis.tool"]
-live-screen-snapshot = "jarvis.plugins.tool.live_screen:LiveScreenTool"
 open-app = "jarvis.plugins.tool.open_app:OpenAppTool"
 type-text = "jarvis.plugins.tool.type_text:TypeTextTool"
 hotkey = "jarvis.plugins.tool.hotkey:HotkeyTool"
 click = "jarvis.plugins.tool.click:ClickTool"
 run-shell = "jarvis.plugins.tool.run_shell:RunShellTool"
 search-web = "jarvis.plugins.tool.search_web:SearchWebTool"
+# Durable reminder scheduling through the existing Tasks scheduler; monitor-tier direct action.
+schedule-task = "jarvis.plugins.tool.schedule_task:ScheduleTaskTool"
 # Gmail (marketplace plugin, 2026-06-01) — read + send mail via the Gmail REST
 # API using the marketplace-stored OAuth token. Router-tier (persona-mandate
 # set), risk_tier "ask": send is consequential. A direct safe/ask-gated action,
@@ -928,7 +929,7 @@ markers = [
 # Only cryptography may resolve through the reviewed native wheel index.
 [[tool.uv.index]]
 name = "native-crypto"
-url = "https://personaljarvis.github.io/PersonalJarvis/native-crypto/50.0.2-1/simple/"
+url = "https://sgangalossa.github.io/PersonalJarvis/native-crypto/50.0.2-2/simple/"
 explicit = true
 
 [tool.uv.sources]

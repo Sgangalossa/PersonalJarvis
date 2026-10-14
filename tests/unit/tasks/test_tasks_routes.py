@@ -122,6 +122,26 @@ async def test_templates_route_is_not_captured_as_task_id(harness: Harness) -> N
     assert res.status_code == 200
     assert "templates" in res.json()
 
+async def test_events_catalog_uses_authoritative_event_schema(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import jarvis.tasks.event_catalog as event_catalog_module
+
+    monkeypatch.setattr(
+        event_catalog_module,
+        "event_catalog",
+        lambda: {"AlphaEvent": ["item_id"], "BetaEvent": ["status", "owner"]},
+    )
+    async with harness.client() as c:
+        res = await c.get("/api/tasks/events")
+    assert res.status_code == 200
+    assert res.json() == {
+        "events": [
+            {"name": "AlphaEvent", "fields": ["item_id"]},
+            {"name": "BetaEvent", "fields": ["status", "owner"]},
+        ]
+    }
+
 
 async def test_add_template_schedules_tagged_task(harness: Harness) -> None:
     key = next(iter(tpl.all_templates()))
@@ -206,6 +226,24 @@ async def test_run_now_409_while_running_and_404_unknown(harness: Harness) -> No
         assert (await c.post("/api/tasks/nope/run")).status_code == 404
         row = (await c.get("/api/tasks")).json()["tasks"][0]
     assert row["last_run_state"] == "running"
+
+
+@pytest.mark.parametrize("state", ["running", "scheduled", "interrupted", "cancelled"])
+async def test_new_unsuccessful_run_does_not_show_previous_success(harness: Harness, state) -> None:
+    async with harness.client() as client:
+        tid = (await client.post("/api/tasks", json=_every_body())).json()["id"]
+        await harness.store.update_state(tid, "running")
+        await harness.store.append_step(tid, "log", {"event": "agent_result", "text": "Old result"})
+        await harness.store.update_state(tid, "scheduled", result={"duration_ms": 1})
+        await harness.store.update_state(tid, "running")
+        if state != "running":
+            await harness.store.update_state(tid, state, error="Latest run unsuccessful")
+        row = (await client.get("/api/tasks")).json()["tasks"][0]
+        detail = (await client.get(f"/api/tasks/{tid}")).json()
+    for receipt in (row, detail):
+        assert receipt["last_result"] is None
+        assert receipt["last_run_state"] != "completed"
+    assert "Old result" in str(detail["steps"])
 
 
 async def test_run_now_without_scheduler_503(harness: Harness) -> None:

@@ -208,7 +208,9 @@ class CreateQuestBody(BaseModel):
 class OpenRoomBody(BaseModel):
     members: list[str] = Field(min_length=2, max_length=6)
     topic: str = ""
-    opened_by: str = "user"
+    # Internal lead/agent provenance is assigned by trusted runtime callers.
+    opened_by: Literal["user"] = "user"
+    live: bool = False
 
 
 class RoomSayBody(BaseModel):
@@ -294,6 +296,19 @@ async def create_agent(body: CreateAgentBody, request: Request) -> dict[str, Any
     )
     description = compose_description(body.description, body.model_dump(include=set(BRIEF_FIELDS)))
     creator = await _creator_from_request(request, rt)
+    # Voice has no Society session. Its new agents still inherit the last
+    # explicit chat seat, never the realtime credential or the Tool Model.
+    if not fields.get("provider") and (creator is None or creator.agent_id == rt.lead_id):
+        from .agent_chat_routes import _service_from_state
+
+        svc = _service_from_state(request.app.state)
+        if svc is None and getattr(request.app.state, "agent_chat_factory", None) is not None:
+            raise HTTPException(503, "The saved Jarvis chat model is temporarily unavailable")
+        selection = svc.store.chat_selection() if svc is not None else None
+        if selection is not None:
+            for key, value in selection.to_dict().items():
+                if not fields.get(key):
+                    fields[key] = value
     if creator is not None:
         from jarvis.society.inherit import inherit_creator_fields
 
@@ -386,6 +401,8 @@ async def patch_agent(agent_id: str, body: PatchAgentBody, request: Request) -> 
         has_rules = any(agent.approval_rules.get(k) for k in ("require_approval", "always_allow"))
         if "approval_rules" not in fields and not has_rules and derived_rules["require_approval"]:
             fields["approval_rules"] = derived_rules
+    if str(fields.get("state") or "") in ("paused", "archived"):
+        await rt.close_agent_screen(agent.agent_id)
     try:
         updated = await rt.roster.update(agent.agent_id, fields)
     except RosterError as exc:
@@ -409,6 +426,10 @@ async def patch_agent(agent_id: str, body: PatchAgentBody, request: Request) -> 
     return {"agent": _agent_row(updated, request), "readback": _capability_readback(rt, updated)}
 
 
+class AgentScreenBody(BaseModel):
+    purpose: str = Field(default="", max_length=200)
+
+
 @router.post("/agents/{agent_id}/chat")
 async def bind_agent_chat(agent_id: str, request: Request) -> dict[str, Any]:
     """The agent's canonical chat (``society:<agent_id>``), created or re-seated
@@ -430,12 +451,65 @@ async def bind_agent_chat(agent_id: str, request: Request) -> dict[str, Any]:
     return {"session": session.to_dict(), "agent_id": agent.agent_id}
 
 
+@router.get("/agents/{agent_id}/screen")
+async def agent_screen_status(agent_id: str, request: Request) -> dict[str, Any]:
+    """Read isolated-screen capability and lease metadata; never returns pixels."""
+    rt = await _runtime(request)
+    try:
+        status = await rt.agent_screen_status(agent_id)
+    except KeyError as exc:
+        raise HTTPException(404, {"reason": str(FailureReason.TARGET_UNKNOWN)}) from exc
+    return {"screen": status}
+
+
+@router.post(
+    "/agents/{agent_id}/screen",
+    openapi_extra={"x-jarvis-dangerous": True},
+)
+async def open_agent_screen(
+    agent_id: str, body: AgentScreenBody, request: Request
+) -> dict[str, Any]:
+    """Lease one isolated session for the agent; never falls back to the user's desktop."""
+    rt = await _runtime(request)
+    from jarvis.agent_screen.protocol import AgentScreenUnavailable
+
+    try:
+        screen = await rt.open_agent_screen(agent_id, purpose=body.purpose)
+    except KeyError as exc:
+        raise HTTPException(404, {"reason": str(FailureReason.TARGET_UNKNOWN)}) from exc
+    except PermissionError as exc:
+        raise HTTPException(
+            409,
+            {"reason": str(FailureReason.BLOCKED_BY_POLICY), "detail": str(exc)},
+        ) from exc
+    except AgentScreenUnavailable as exc:
+        raise HTTPException(
+            503,
+            {"reason": "agent_screen_unavailable", "detail": str(exc)},
+        ) from exc
+    return {"screen": screen}
+
+
+@router.delete(
+    "/agents/{agent_id}/screen",
+    openapi_extra={"x-jarvis-dangerous": True},
+)
+async def close_agent_screen(agent_id: str, request: Request) -> dict[str, Any]:
+    """Release this Society runtime's isolated screen lease for the agent."""
+    rt = await _runtime(request)
+    agent = await rt.roster.resolve(agent_id)
+    if agent is None:
+        raise HTTPException(404, {"reason": str(FailureReason.TARGET_UNKNOWN)})
+    return {"closed": await rt.close_agent_screen(agent.agent_id)}
+
+
 @router.delete("/agents/{agent_id}")
 async def archive_agent(agent_id: str, request: Request) -> dict[str, Any]:
     rt = await _runtime(request)
     agent = await rt.roster.resolve(agent_id)
     if agent is None:
         raise HTTPException(404, {"reason": str(FailureReason.TARGET_UNKNOWN)})
+    await rt.close_agent_screen(agent.agent_id)
     try:
         archived = await rt.roster.archive(agent.agent_id)
     except RosterError as exc:
@@ -556,6 +630,7 @@ async def kill_agent(agent_id: str, request: Request) -> dict[str, Any]:
     agent = await rt.roster.resolve(agent_id)
     if agent is None:
         raise HTTPException(404, {"reason": str(FailureReason.TARGET_UNKNOWN)})
+    await rt.close_agent_screen(agent.agent_id)
     dropped = 0
     manager = rt._get_manager()  # noqa: SLF001 — the route is the runtime's operator
     for run_id, owner in list(rt.scheduler.running.items()):
@@ -852,7 +927,10 @@ async def list_agent_skills(agent_id: str, request: Request) -> dict[str, Any]:
     return {"skills": skills.summaries(), "root": str(skills.root)}
 
 
-@router.post("/agents/{agent_id}/skills/{slug}/promote")
+@router.post(
+    "/agents/{agent_id}/skills/{slug}/promote",
+    openapi_extra={"x-jarvis-dangerous": True},
+)
 async def promote_agent_skill(agent_id: str, slug: str, request: Request) -> dict[str, Any]:
     """Copy a learned skill into the user's global skills as a DRAFT (AP-15)."""
     rt = await _runtime(request)
@@ -947,7 +1025,7 @@ async def list_rooms(request: Request) -> dict[str, Any]:
     return {"rooms": [r.to_dict() for r in await rt.rooms.list()]}
 
 
-@router.post("/rooms")
+@router.post("/rooms", openapi_extra={"x-jarvis-dangerous": True})
 async def open_room(body: OpenRoomBody, request: Request) -> dict[str, Any]:
     rt = await _runtime(request)
     for member in body.members:
@@ -956,7 +1034,12 @@ async def open_room(body: OpenRoomBody, request: Request) -> dict[str, Any]:
                 404, {"reason": str(FailureReason.TARGET_UNKNOWN), "member": member}
             )
     try:
-        room = await rt.rooms.open(opened_by=body.opened_by, members=body.members, topic=body.topic)
+        room = await rt.rooms.open(
+            opened_by=body.opened_by,
+            members=body.members,
+            topic=body.topic,
+            live=body.live,
+        )
     except RoomError as exc:
         raise _typed_error(exc) from exc
     return {"room": room.to_dict()}
@@ -976,7 +1059,7 @@ async def room_say(room_id: str, body: RoomSayBody, request: Request) -> dict[st
 async def room_settle(room_id: str, request: Request) -> dict[str, Any]:
     rt = await _runtime(request)
     try:
-        room = await rt.rooms.settle(room_id, reason="user", by="user")
+        room = await rt.settle_room(room_id, reason="user", by="user")
     except RoomError as exc:
         raise _typed_error(exc) from exc
     return {"room": room.to_dict()}
@@ -1130,6 +1213,7 @@ async def _create_routine_for(
     )
     row = await store.get(task_id) or {}
     zone = getattr(spec.trigger, "timezone", None) or turn_timezone()
+    webhook = spec.trigger.type == "webhook"
     return {
         "id": task_id,
         "title": spec.title,
@@ -1137,6 +1221,11 @@ async def _create_routine_for(
         "seat": seat,
         "state": row.get("state"),
         "next_run": next_run_readback(row.get("due_at_ns"), zone),
+        "connection_required": webhook,
+        "webhook_path": f"/api/tasks/hooks/{task_id}" if webhook else None,
+        "connection_path": (
+            f"/api/tasks/{task_id}/webhook-connection" if webhook else None
+        ),
     }
 
 
@@ -1215,7 +1304,7 @@ async def update_agent_routine(
     agent_id: str, task_id: str, body: RoutineUpdateBody, request: Request
 ) -> dict[str, Any]:
     """Edit an agent's routine without losing its identity or execution history."""
-    from jarvis.society.routines import is_agent_routine, manage_routine
+    from jarvis.society.routines import is_agent_routine, manage_routine, missing_timezone
     from jarvis.tasks.scheduler import TaskNotFound, TaskStateConflict
 
     rt = await _runtime(request)
@@ -1228,12 +1317,15 @@ async def update_agent_routine(
     if scheduler is None:
         raise HTTPException(503, "The task scheduler is unavailable")
     try:
-        await manage_routine(
-            agent,
-            {**body.model_dump(), "task_id": task_id, "operation": "update"},
-            store,
-            scheduler,
-        )
+        with _turn_timezone(request):
+            if missing_timezone(body.schedule):
+                raise HTTPException(422, _TIMEZONE_REQUIRED)
+            await manage_routine(
+                agent,
+                {**body.model_dump(), "task_id": task_id, "operation": "update"},
+                store,
+                scheduler,
+            )
     except TaskNotFound as exc:
         raise HTTPException(404, "Routine not found") from exc
     except TaskStateConflict as exc:
@@ -1335,10 +1427,13 @@ async def resolve_approval(
     except KeyError as exc:
         raise HTTPException(404, {"reason": str(FailureReason.TARGET_UNKNOWN)}) from exc
     promoted: str | None = None
-    if body.approve and item.capability == MEMORY_SHARE_CAPABILITY:
+    if item.capability == MEMORY_SHARE_CAPABILITY:
         knowledge_id = int(item.action.get("knowledge_id") or 0)
         try:
-            promoted = await rt.memory.promote(knowledge_id)
+            if str(item.state) == "approved":
+                promoted = await rt.memory.promote(knowledge_id)
+            elif str(item.state) == "denied":
+                await rt.memory.dismiss(knowledge_id)
         except MemoryRefused as exc:
             raise HTTPException(409, {"reason": "blocked_by_policy", "detail": str(exc)}) from exc
     return {"approval": item.to_dict(), "promoted": promoted}
@@ -1349,6 +1444,15 @@ async def resurface_approvals(request: Request) -> dict[str, Any]:
     """App focus / voice turn: parked items are asked again."""
     rt = await _runtime(request)
     revived = await rt.approvals.resurface()
+    if revived:
+        await rt.publish_attention(
+            kind="approval",
+            status="needs_input",
+            count=len(revived),
+            agent_ids=tuple(dict.fromkeys(item.agent_id for item in revived)),
+            society_trace=revived[0].trace_id,
+            request_id=revived[0].id,
+        )
     return {"approvals": [a.to_dict() for a in revived], "total": len(revived)}
 
 

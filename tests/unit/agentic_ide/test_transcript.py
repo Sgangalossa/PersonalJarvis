@@ -489,3 +489,34 @@ def test_only_an_alternate_screen_agent_holds_the_screen() -> None:
     assert buffer.holds_screen is True
     buffer.feed("\x1b[?1049l")
     assert buffer.holds_screen is False
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("before\x1b]0;title\x07after", "beforeafter"),
+        ("before\x1b]0;title\x1b\\after", "beforeafter"),
+        ("\x1b]8;;https://example.test\x07link\x1b]8;;\x07", "link"),
+        ("\x1b]unfinished", "unfinished"),
+        ("\x1b]outer\x1b]inner\x07tail", "outertail"),
+        ("\x1b]broken\x1b[32mtext", "brokentext"),
+    ],
+)
+def test_strip_ansi_osc_terminators_and_malformed_prefixes(text, expected) -> None:
+    assert strip_ansi(text) == expected
+
+
+def test_osc_scan_visits_repeated_unterminated_prefixes_only_linearly() -> None:
+    from jarvis.agentic_ide.transcript import _strip_osc
+
+    class CountedText(str):
+        reads = 0
+
+        def __getitem__(self, key):
+            if isinstance(key, int):
+                self.reads += 1
+            return super().__getitem__(key)
+
+    text = CountedText("\x1b]" * 20_000 + "tail")
+    assert _strip_osc(text) == str(text)
+    assert text.reads <= 2 * len(text)
+    assert strip_ansi(str(text)) == "tail"

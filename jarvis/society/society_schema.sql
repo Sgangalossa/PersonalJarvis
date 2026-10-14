@@ -173,11 +173,22 @@ CREATE TABLE IF NOT EXISTS society_meta (
 CREATE TABLE IF NOT EXISTS society_deliveries (
     event_id TEXT PRIMARY KEY REFERENCES society_events(event_id),
     status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'delivered', 'failed')),
-    error TEXT NOT NULL DEFAULT ''
+    error TEXT NOT NULL DEFAULT '',
+    claim_id TEXT NOT NULL DEFAULT ''
 );
 CREATE TRIGGER IF NOT EXISTS society_queue_message AFTER INSERT ON society_events
 WHEN NEW.msg_type IN ('SAY', 'QUERY', 'ANSWER', 'PROPOSE', 'HOLD', 'RELEASE')
     AND NEW.to_agent IS NOT NULL AND NEW.to_agent != 'user' AND NEW.from_agent != 'scheduler'
+BEGIN
+    INSERT OR IGNORE INTO society_deliveries (event_id) VALUES (NEW.event_id);
+END;
+
+-- A RESULT's handoff must survive a crash before bus publication too.
+-- Validation remains in the scheduler, including when recovering the queue.
+CREATE TRIGGER IF NOT EXISTS society_queue_result AFTER INSERT ON society_events
+WHEN NEW.msg_type = 'RESULT' AND NEW.from_agent != 'scheduler'
+    AND json_type(NEW.payload_json, '$.next_owner') = 'text'
+    AND length(trim(json_extract(NEW.payload_json, '$.next_owner'), char(9,10,11,12,13,32))) > 0
 BEGIN
     INSERT OR IGNORE INTO society_deliveries (event_id) VALUES (NEW.event_id);
 END;

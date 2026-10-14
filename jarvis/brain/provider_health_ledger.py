@@ -58,11 +58,11 @@ nothing else (AP-9). Nothing initialises at import time (AP-26).
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import os
 import re
+import secrets
 import threading
 import time
 import uuid
@@ -124,6 +124,13 @@ TRANSIENT_TTL_S = 30 * 60.0
 #: survives a restart roughly right without a write per call.
 _REFRESH_WRITE_S = 15 * 60.0
 
+# The control key is stable per installation and already protected by the OS
+# credential store (with the existing 0600 fallback on headless systems). A
+# process-local random key is a fail-safe for an incomplete first boot: it may
+# forget a stale red verdict after restart, but never leaves an unkeyed digest
+# of an API credential on disk.
+_PROCESS_FINGERPRINT_KEY = secrets.token_bytes(32)
+
 # Plugin names that differ from the provider-card id they belong to. The
 # OpenRouter speech plugin calls itself ``openrouter`` — the same id as the
 # OpenRouter BRAIN card — while its card is ``openrouter-tts``.
@@ -165,16 +172,44 @@ def _norm_provider(provider: str | None, modality: str) -> str:
     return _ALIASES.get((modality, key), key)
 
 
+def _fingerprint_key() -> bytes:
+    """Return a stable installation key without adding import-time I/O."""
+    try:
+        from jarvis.core.control_key import get_control_key
+
+        key = get_control_key()
+    except Exception as exc:  # noqa: BLE001 -- health display must remain optional
+        log.debug(
+            "health: installation fingerprint key unavailable (%s); using process key",
+            type(exc).__name__,
+        )
+        key = None
+    return key.encode("utf-8") if key else _PROCESS_FINGERPRINT_KEY
+
+
 def credential_fingerprint(credential: str | None) -> str:
-    """A short one-way fingerprint of a credential ("" when there is none).
+    """A short keyed fingerprint of a credential ("" when there is none).
 
     Domain-separated and truncated: enough to notice that the key changed,
-    useless for recovering it. Never the credential itself.
+    but not an offline-comparable hash of the credential. Never the credential
+    itself.
     """
     if not credential:
         return ""
-    digest = hashlib.sha256(b"jarvis-provider-health\x00" + credential.encode("utf-8"))
-    return digest.hexdigest()[:16]
+    # Treat the credential as keying material, not as a password to hash. HKDF
+    # binds the pseudonym to this installation's secret salt and gives us the
+    # stable, non-reversible comparison token the ledger needs. Keeping this on
+    # the KDF API also prevents future refactors from accidentally persisting a
+    # bare fast hash of the credential.
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+    return HKDF(
+        algorithm=hashes.SHA256(),
+        length=8,
+        salt=_fingerprint_key(),
+        info=b"jarvis-provider-health-v3",
+    ).derive(credential.encode("utf-8")).hex()
 
 
 @dataclass(frozen=True, slots=True)

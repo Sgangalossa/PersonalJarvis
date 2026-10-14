@@ -211,6 +211,7 @@ class EntryRow(BaseModel):
     price_source: str
     ref_id: str
     label: str
+    account_id: str = ""
 
 
 class EntriesPage(BaseModel):

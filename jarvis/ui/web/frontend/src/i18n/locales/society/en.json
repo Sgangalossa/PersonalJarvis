@@ -122,6 +122,20 @@
       "model_saving": "Saving…",
       "model_apply": "Apply model"
     },
+    "ledger": {
+      "title": "Society ledger",
+      "subtitle": "Durable history from the society event log.",
+      "empty": "No society events yet.",
+      "error": "The society ledger could not be loaded.",
+      "time": "Time",
+      "type": "Type",
+      "from": "From",
+      "to": "To",
+      "detail": "Detail",
+      "cost": "Cost",
+      "total_cost": "Tracked model cost",
+      "board": "Board"
+    },
     "world": {
       "talk_kind_query": "asks",
       "talk_kind_answer": "answers",
@@ -539,7 +553,9 @@
         "blocked": "Trigger blocked"
       },
       "filtered": "Input did not match the filters.",
-      "duplicate": "Input was already received."
+      "duplicate": "Input was already received.",
+      "event_filter": "Event filter (optional)",
+      "event_fields": "Allowed event fields"
     },
     "browser_live": {
       "live": "Live",
@@ -730,6 +746,7 @@
       "viewport": "Jarvis Verse",
       "loading": "Opening the Jarvis Verse…",
       "no_graphics": "3D rendering is unavailable here. Every agent's status stays available in the agents list.",
+      "reduced_motion": "Reduce motion is enabled. The animated 3D floor is paused; the Ledger keeps the same agent activity available without motion.",
       "count_working": "{0} working",
       "count_waiting": "{0} waiting",
       "count_idle": "{0} idle",
@@ -739,7 +756,7 @@
       "state_paused": "Paused",
       "open_agent": "Open {0}",
       "overview": "Overview",
-      "ledger": "Agents list",
+      "ledger": "Open Ledger",
       "help": "WASD walk · Shift runs · Space jumps · E interacts · M map · H help & settings",
       "sample": "Sample agents — the backend is not reachable yet.",
       "overflow": "Only the first {0} agents have a desk; the list shows everyone.",
@@ -1160,6 +1177,25 @@
       "errand_flying": "Taking {0} a task",
       "errand_task": "Here is a new task for you.",
       "errand_ack": "Got it, on it!"
+    },
+    "card": {
+      "learned_review_hint": "Learned private skills remain advisory instructions. Send one to Skills as a draft to review it before global activation.",
+      "learned_review": "Review in Skills",
+      "learned_reviewing": "Preparing draft…",
+      "shared_figures": "Shared avatar catalog"
+    },
+    "screen": {
+      "title": "Isolated screen",
+      "hint": "A private agent desktop. It never falls back to your physical screen.",
+      "loading": "Checking availability…",
+      "open": "Open isolated screen",
+      "opening": "Opening…",
+      "close": "Close isolated screen",
+      "closing": "Closing…",
+      "active": "Active screen",
+      "isolated": "isolated",
+      "unavailable": "Unavailable",
+      "load_error": "Could not read screen status."
     }
   }
 }

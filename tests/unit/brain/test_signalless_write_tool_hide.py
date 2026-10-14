@@ -45,6 +45,7 @@ def _surface() -> dict:
         "wiki-ingest": object(),      # write — hide on a conversational turn
         "google_calendar": object(),  # write path — hide on a conversational turn
         "call-contact": object(),     # action (places a call) — hide
+        "schedule-task": object(),     # persistent write — hide on a conversational turn
         "computer_use": object(),     # inheritance half — see the sibling module
         "spawn_worker": object(),     # inheritance half — see the sibling module
     }
@@ -58,7 +59,7 @@ def test_plain_question_hides_write_and_record_tools():
     )
     for hidden in (
         "contact-upsert", "update_profile", "wiki-ingest",
-        "google_calendar", "call-contact",
+        "google_calendar", "call-contact", "schedule-task",
     ):
         assert hidden not in out, hidden
     # Read-only tools are never stripped — the turn stays answerable inline.
@@ -66,11 +67,21 @@ def test_plain_question_hides_write_and_record_tools():
         assert kept in out, kept
 
 
+def test_screen_turn_hides_schedule_task_alongside_other_writes():
+    m = _mgr()
+    m._tools = _surface()  # type: ignore[attr-defined]
+    m._evidence_required_tool = ""
+    out = m._image_turn_tool_override()
+    assert "schedule-task" not in out
+    assert "search_web" in out
+    assert "screenshot" in out
+
 def test_smalltalk_turn_hides_write_and_record_tools():
     m = _mgr(smalltalk=True)
     out = m._hide_action_tools_on_signalless_turn(_surface(), "Alles klar bei dir")
     assert "contact-upsert" not in out
     assert "google_calendar" not in out
+    assert "schedule-task" not in out
 
 
 def test_action_intent_keeps_the_write_tools():
@@ -80,6 +91,7 @@ def test_action_intent_keeps_the_write_tools():
         _surface(), "Trag meinen Urlaub in den Kalender ein"  # i18n-allow
     )
     assert "google_calendar" in out
+    assert "schedule-task" in out
     assert "contact-upsert" in out
 
 

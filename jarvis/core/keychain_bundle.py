@@ -433,10 +433,9 @@ class DarwinBundleKeyringBackend(_KeyringBackendBase):  # type: ignore[valid-typ
             self._migrate_legacy(service, key, legacy_val)
         except Exception:  # noqa: BLE001 -- migration is best-effort
             logger.warning(
-                "Failed to migrate legacy Keychain item %r into the Jarvis "
+                "Failed to migrate a legacy Keychain item into the Jarvis "
                 "vault; returning the value anyway and leaving the legacy "
-                "item in place.",
-                key,
+                "item in place."
             )
         return legacy_val
 

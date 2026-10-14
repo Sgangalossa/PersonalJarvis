@@ -570,6 +570,10 @@ class AudioPlayer:
         self._active_stream: sd.OutputStream | None = None
         self._active_source_rate: int | None = None
         self._active_device_rate: int | None = None
+        # One speaking-edge receipt per persistent native stream. Streaming
+        # TTS calls play_chunks() once per sentence, so a call-local flag would
+        # publish duplicate AudioOutFirst events during one spoken answer.
+        self._audio_out_first_published = False
         # ``OutputStream`` setup runs in a worker thread while stop() runs on
         # the voice event loop. A stop can therefore land after setup began but
         # before the worker publishes the new stream. The generation + lock
@@ -1410,6 +1414,7 @@ class AudioPlayer:
                         self._active_stream = new_stream
                         self._active_source_rate = needed_rate
                         self._active_device_rate = device_rate
+                        self._audio_out_first_published = False
                         return new_stream, device_rate
                 # stop() won while the worker opened PortAudio. Close the late
                 # handle locally; never publish it as the active stream.
@@ -1418,12 +1423,11 @@ class AudioPlayer:
 
             pending = bytearray()
             pending_rate: int | None = None
-            first_audio_published = False
             wrote_audio = False
             last_flushed_sample = 0
 
             async def _flush_pending(*, final: bool = False) -> bool:
-                nonlocal pending, pending_rate, first_audio_published
+                nonlocal pending, pending_rate
                 nonlocal last_flushed_sample, wrote_audio
                 if not pending or pending_rate is None:
                     return True
@@ -1502,8 +1506,11 @@ class AudioPlayer:
                 # mascot mouth + SPEAKING bubble sync to actual audio start
                 # instead of the speculative SPEAKING state-transition.
                 # MUST be awaited: EventBus.publish is an async coroutine.
-                if not first_audio_published and self._bus is not None:
-                    first_audio_published = True
+                if (
+                    not getattr(self, "_audio_out_first_published", False)
+                    and self._bus is not None
+                ):
+                    self._audio_out_first_published = True
                     try:
                         await self._bus.publish(AudioOutFirst())
                         log.info("AudioOutFirst published")

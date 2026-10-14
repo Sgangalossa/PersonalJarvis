@@ -1,8 +1,10 @@
 """Unit tests for the cross-platform open/reveal helpers (per-OS argv + no-op)."""
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
 import jarvis.platform.open_path as op
@@ -30,36 +32,87 @@ def _caps(display: bool = True) -> Capabilities:
     )
 
 
-def test_open_file_linux_uses_xdg_open():
+def test_open_file_uses_qt_desktop_service():
     with patch.object(op, "detect_capabilities", return_value=_caps()), \
-         patch.object(op, "detect_platform", return_value="linux"), \
-         patch.object(op.subprocess, "Popen") as popen:
+         patch.object(op, "_desktop_services_open", return_value=True) as desktop_open:
         assert op.open_file(Path("/x/y.md")) is True
-        argv = popen.call_args.args[0]
-        assert argv[0] == "xdg-open" and argv[1] == "/x/y.md"
+    desktop_open.assert_called_once_with(Path(os.path.abspath("/x/y.md")).as_posix())
 
 
-def test_open_file_darwin_uses_open():
+def test_open_file_makes_option_like_relative_path_absolute():
     with patch.object(op, "detect_capabilities", return_value=_caps()), \
-         patch.object(op, "detect_platform", return_value="darwin"), \
-         patch.object(op.subprocess, "Popen") as popen:
-        assert op.open_file(Path("/x/y.md")) is True
-        assert popen.call_args.args[0][0] == "open"
+         patch.object(op, "_desktop_services_open", return_value=True) as desktop_open:
+        assert op.open_file(Path("--help")) is True
+    opened = desktop_open.call_args.args[0]
+    assert Path(opened).is_absolute()
+    assert Path(opened).name == "--help"
 
 
-def test_open_file_windows_uses_startfile():
+def test_desktop_services_open_builds_a_local_file_url():
+    seen = []
+
+    class FakeQUrl:
+        def __init__(self, path: str) -> None:
+            self._path = path
+
+        @classmethod
+        def fromLocalFile(cls, path: str):
+            return cls(path)
+
+        def isLocalFile(self) -> bool:
+            return True
+
+        def toLocalFile(self) -> str:
+            return self._path
+
+    qt_core = ModuleType("PySide6.QtCore")
+    qt_core.QUrl = FakeQUrl  # type: ignore[attr-defined]
+    qt_gui = ModuleType("PySide6.QtGui")
+    qt_gui.QDesktopServices = SimpleNamespace(  # type: ignore[attr-defined]
+        openUrl=lambda url: seen.append(url) or True
+    )
+
+    with patch.dict(
+        sys.modules,
+        {
+            "PySide6": ModuleType("PySide6"),
+            "PySide6.QtCore": qt_core,
+            "PySide6.QtGui": qt_gui,
+        },
+    ):
+        assert op._desktop_services_open("/x/report; touch injected.txt") is True
+
+    assert len(seen) == 1
+    assert seen[0].isLocalFile()
+    assert seen[0].toLocalFile() == "/x/report; touch injected.txt"
+
+
+def test_open_file_keeps_shell_metacharacters_inside_one_path():
+    path = Path("/x/report; touch injected.txt")
     with patch.object(op, "detect_capabilities", return_value=_caps()), \
-         patch.object(op, "detect_platform", return_value="win32"), \
-         patch.object(op.os, "startfile", create=True) as startfile:
-        assert op.open_file(Path("C:/x/y.md")) is True
-        startfile.assert_called_once()
+         patch.object(op, "_desktop_services_open", return_value=True) as desktop_open:
+        assert op.open_file(path) is True
+
+    desktop_open.assert_called_once_with(Path(os.path.abspath(path)).as_posix())
+
+
+def test_open_file_desktop_service_error_returns_false():
+    with patch.object(op, "detect_capabilities", return_value=_caps()), \
+         patch.object(op, "_desktop_services_open", side_effect=ValueError("bad path")):
+        assert op.open_file(Path("/x/bad\x00name")) is False
+
+
+def test_open_file_returns_false_when_desktop_service_refuses():
+    with patch.object(op, "detect_capabilities", return_value=_caps()), \
+         patch.object(op, "_desktop_services_open", return_value=False):
+        assert op.open_file(Path("/x/y.md")) is False
 
 
 def test_open_file_headless_is_noop():
     with patch.object(op, "detect_capabilities", return_value=_caps(display=False)), \
-         patch.object(op.subprocess, "Popen") as popen:
+         patch.object(op, "_desktop_services_open") as desktop_open:
         assert op.open_file(Path("/x/y.md")) is False
-        popen.assert_not_called()
+        desktop_open.assert_not_called()
 
 
 def test_reveal_linux_opens_parent_dir():
@@ -68,7 +121,20 @@ def test_reveal_linux_opens_parent_dir():
          patch.object(op.subprocess, "Popen") as popen:
         assert op.reveal_in_folder(Path("/x/y/z.md")) is True
         argv = popen.call_args.args[0]
-        assert argv[0] == "xdg-open" and argv[1] == "/x/y"
+        expected_parent = Path(op.os.path.abspath("/x/y/z.md")).parent.as_posix()
+        assert argv[0] == "xdg-open" and argv[1] == expected_parent
+        assert popen.call_args.kwargs["shell"] is False
+
+
+def test_reveal_linux_makes_option_like_relative_path_absolute():
+    with patch.object(op, "detect_capabilities", return_value=_caps()), \
+         patch.object(op, "detect_platform", return_value="linux"), \
+         patch.object(op.subprocess, "Popen") as popen:
+        assert op.reveal_in_folder(Path("-rf")) is True
+        argv = popen.call_args.args[0]
+        assert argv[0] == "xdg-open"
+        assert argv[1] == Path(op.os.path.abspath("-rf")).parent.as_posix()
+        assert not argv[1].startswith("-")
 
 
 def test_reveal_windows_uses_explorer_select():
@@ -129,27 +195,29 @@ def test_open_file_with_xdg_open_linux_opens_file():
         assert argv[0] == "xdg-open" and argv[1] == "/out/report.md"
 
 
-def test_open_file_with_startfile_quotes_cmd_metacharacters(monkeypatch):
-    """A '&' in a file name must stay inside quotes, never start a second command."""
-    launched: list[object] = []
+def test_open_file_with_startfile_passes_metacharacters_as_shell_execute_argument(monkeypatch):
+    """Windows shortcut launch must not pass file names through cmd.exe."""
     monkeypatch.setattr(op, "detect_capabilities", lambda: _caps())
-    monkeypatch.setattr(op.subprocess, "Popen", lambda cmd, **kw: launched.append(cmd))
-
-    ok = op.open_file_with(
-        Path(r"C:\out\a&calc.md"), "startfile", r"C:\links\Editor.lnk"
-    )
+    with patch.object(op.os, "startfile", create=True) as startfile, \
+         patch.object(op.subprocess, "Popen") as popen:
+        ok = op.open_file_with(
+            Path(r"C:\out\a&calc.md"), "startfile", r"C:\links\Editor.lnk"
+        )
 
     assert ok is True
-    assert launched == [r'cmd /c start "" "C:\links\Editor.lnk" "C:\out\a&calc.md"']
+    startfile.assert_called_once_with(
+        r"C:\links\Editor.lnk", "open", arguments='"C:\\out\\a&calc.md"'
+    )
+    popen.assert_not_called()
 
 
 def test_open_file_with_startfile_refuses_a_quote(monkeypatch):
-    launched: list[object] = []
     monkeypatch.setattr(op, "detect_capabilities", lambda: _caps())
-    monkeypatch.setattr(op.subprocess, "Popen", lambda cmd, **kw: launched.append(cmd))
-
-    assert op.open_file_with(Path('/x/a" & calc "b.md'), "startfile", "app") is False
-    assert launched == []
+    with patch.object(op.os, "startfile", create=True) as startfile, \
+         patch.object(op.subprocess, "Popen") as popen:
+        assert op.open_file_with(Path('/x/a" & calc "b.md'), "startfile", "app") is False
+    startfile.assert_not_called()
+    popen.assert_not_called()
 
 
 def test_open_file_with_headless_is_noop():
@@ -190,6 +258,32 @@ def test_open_url_linux_uses_xdg_open():
         assert argv[0] == "xdg-open"
         assert argv[1].startswith("https://accounts.google.com")
         popen.assert_not_called()  # no double-open when xdg-open succeeds
+
+
+def test_open_url_does_not_log_url_query_parameters(caplog):
+    oauth_url = "https://accounts.google.com/oauth?state=private-state-token&code=private-code"
+    with patch.object(op, "detect_capabilities", return_value=_caps()), \
+         patch.object(op, "detect_platform", return_value="linux"), \
+         patch.object(op.subprocess, "run", return_value=_ok()):
+        assert op.open_url(oauth_url) is True
+
+    assert "private-state-token" not in caplog.text
+    assert "private-code" not in caplog.text
+    assert oauth_url not in caplog.text
+
+
+def test_open_url_opener_timeout_does_not_log_url(caplog):
+    oauth_url = "https://accounts.google.com/oauth?state=private-state-token&code=private-code"
+    timeout = op.subprocess.TimeoutExpired(cmd=["xdg-open", oauth_url], timeout=8)
+    with patch.object(op, "detect_capabilities", return_value=_caps()), \
+         patch.object(op, "detect_platform", return_value="linux"), \
+         patch.object(op.subprocess, "run", side_effect=timeout), \
+         patch.object(op.shutil, "which", return_value=None):
+        assert op.open_url(oauth_url) is False
+
+    assert "private-state-token" not in caplog.text
+    assert "private-code" not in caplog.text
+    assert oauth_url not in caplog.text
 
 
 def test_open_url_linux_falls_back_to_browser_bin_when_xdg_open_fails():

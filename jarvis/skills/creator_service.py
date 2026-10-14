@@ -383,7 +383,11 @@ def _extract_frontmatter(content: str) -> dict[str, Any] | None:
     try:
         data = yaml.safe_load(parts[1])
     except yaml.YAMLError as exc:
-        raise ValueError(f"Malformed YAML frontmatter: {exc}") from exc
+        # PyYAML diagnostics can echo the offending source line, including
+        # paths or credentials pasted into a draft.  Preserve the traceback in
+        # the server log, but keep the validation result safe for the web API.
+        _LOG.warning("skill creator frontmatter parse failed", exc_info=exc)
+        raise ValueError("Malformed YAML frontmatter.") from exc
     return data if isinstance(data, dict) else None
 
 
@@ -429,14 +433,15 @@ def validate_skill_md(content: str) -> tuple[dict[str, Any], dict[str, Any] | No
 
     try:
         fm_dict = _extract_frontmatter(content)
-    except ValueError as exc:
+    except ValueError:
+        parse_error = "Malformed YAML frontmatter."
         return (
             {
                 "ok": False,
                 "state": "draft",
-                "errors": [str(exc)],
+                "errors": [parse_error],
                 "warnings": [],
-                "parse_error": str(exc),
+                "parse_error": parse_error,
             },
             None,
         )

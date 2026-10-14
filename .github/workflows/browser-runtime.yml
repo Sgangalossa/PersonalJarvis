@@ -6,11 +6,40 @@ on:
 permissions:
   contents: read
 jobs:
+  select-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      os: ${{ steps.select.outputs.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.11'
+      - name: Select runners with available native dependencies
+        id: select
+        shell: bash
+        run: |
+          portable='["ubuntu-latest","ubuntu-24.04-arm","windows-latest","macos-latest","macos-15-intel"]'
+          complete='["ubuntu-latest","ubuntu-24.04-arm","windows-latest","windows-11-arm","macos-latest","macos-15-intel"]'
+          if python scripts/ci/check_native_crypto_publication.py; then
+            selected="$complete"
+          elif [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "Windows ARM browser qualification requires the reviewed native-crypto publication." >&2
+            exit 1
+          else
+            echo "::warning::Windows ARM browser qualification is held until native crypto is published."
+            selected="$portable"
+          fi
+          echo "os=$selected" >> "$GITHUB_OUTPUT"
+
   browser:
+    needs: select-matrix
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, windows-11-arm, macos-latest, macos-15-intel]
+        os: ${{ fromJSON(needs.select-matrix.outputs.os) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:

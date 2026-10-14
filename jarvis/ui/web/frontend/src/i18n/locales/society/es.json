@@ -122,6 +122,20 @@
       "model_saving": "Guardando…",
       "model_apply": "Aplicar modelo"
     },
+    "ledger": {
+      "title": "Registro de la sociedad",
+      "subtitle": "Historial duradero del registro de eventos de la sociedad.",
+      "empty": "Todavía no hay eventos de la sociedad.",
+      "error": "No se pudo cargar el registro de la sociedad.",
+      "time": "Hora",
+      "type": "Tipo",
+      "from": "De",
+      "to": "Para",
+      "detail": "Detalle",
+      "cost": "Coste",
+      "total_cost": "Coste de modelos registrado",
+      "board": "Tablón"
+    },
     "world": {
       "talk_kind_query": "pregunta",
       "talk_kind_answer": "responde",
@@ -539,7 +553,9 @@
         "blocked": "Activador bloqueado"
       },
       "filtered": "La entrada no coincide con los filtros.",
-      "duplicate": "La entrada ya se recibió."
+      "duplicate": "La entrada ya se recibió.",
+      "event_filter": "Filtro de evento (opcional)",
+      "event_fields": "Campos de evento permitidos"
     },
     "browser_live": {
       "live": "En directo",
@@ -730,6 +746,7 @@
       "viewport": "Jarvis Verse",
       "loading": "Abriendo el Jarvis Verse…",
       "no_graphics": "El renderizado 3D no está disponible aquí. El estado de cada agente sigue en la lista de agentes.",
+      "reduced_motion": "Reducir movimiento está activado. La planta 3D animada está en pausa; el Registro mantiene la misma actividad de agentes sin movimiento.",
       "count_working": "{0} trabajando",
       "count_waiting": "{0} esperando",
       "count_idle": "{0} libres",
@@ -739,7 +756,7 @@
       "state_paused": "En pausa",
       "open_agent": "Abrir {0}",
       "overview": "Vista general",
-      "ledger": "Lista de agentes",
+      "ledger": "Abrir registro",
       "help": "WASD caminar · Shift corre · Espacio salta · E usar · M mapa · H ayuda y ajustes",
       "sample": "Agentes de ejemplo: el backend aún no está disponible.",
       "overflow": "Solo los primeros {0} agentes tienen escritorio; la lista muestra a todos.",
@@ -1160,6 +1177,25 @@
       "errand_flying": "Lleva una tarea a {0}",
       "errand_task": "Aquí tienes una tarea nueva.",
       "errand_ack": "¡Entendido, voy!"
+    },
+    "card": {
+      "learned_review_hint": "Las habilidades privadas aprendidas siguen siendo instrucciones consultivas. Envía una a Habilidades como borrador para revisarla antes de activarla globalmente.",
+      "learned_review": "Revisar en Habilidades",
+      "learned_reviewing": "Preparando borrador…",
+      "shared_figures": "Catálogo de avatares compartidos"
+    },
+    "screen": {
+      "title": "Pantalla aislada",
+      "hint": "Un escritorio privado del agente. Nunca usa como alternativa tu pantalla física.",
+      "loading": "Comprobando disponibilidad…",
+      "open": "Abrir pantalla aislada",
+      "opening": "Abriendo…",
+      "close": "Cerrar pantalla aislada",
+      "closing": "Cerrando…",
+      "active": "Pantalla activa",
+      "isolated": "aislada",
+      "unavailable": "No disponible",
+      "load_error": "No se pudo consultar el estado de la pantalla."
     }
   }
 }

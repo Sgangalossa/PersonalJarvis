@@ -97,6 +97,8 @@ _UNIVERSAL_ACTION_VERBS: frozenset[str] = frozenset({
     "entpack", "entpacke", "unzip",
     "speichere", "speicher", "speichert", "save",
     "frag", "frage", "fragt", "ask",
+    "ricord", "ricorda", "ricordami", "remind", "remindme",
+    "erinner", "erinnere", "erinnern", "erinnere mich",
     "antwort", "antworte", "antwortet", "reply", "respond",
     "drucke", "drucken", "print",
     "lade", "laden", "ladet", "download", "upload",

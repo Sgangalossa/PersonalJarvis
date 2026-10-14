@@ -359,9 +359,21 @@ class CheckpointEngine:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        task = loop.create_task(self._watch_turn(agent_id, session_id))
+        svc = self._chat_service()
+        if svc is None:
+            return
+        # Subscribe before scheduling the watcher. The turn prompt is built
+        # immediately before the runner starts emitting tool events, so the
+        # subscription must exist before the watcher task is scheduled. Some
+        # lightweight surface test doubles expose only the running probe,
+        # therefore they remain valid no-op observers.
+        subscribe = getattr(svc, "subscribe", None)
+        if subscribe is None:
+            return
+        queue = subscribe(session_id)
+        task = loop.create_task(self._watch_turn(agent_id, session_id, queue, svc))
         self._watchers[agent_id] = task
-        task.add_done_callback(lambda t, a=agent_id: self._watcher_done(a, t))
+        task.add_done_callback(lambda t, a=agent_id, q=queue, service=svc: self._watcher_done(a, t, service, session_id, q))
 
     async def note_tool_call(
         self, agent_id: str, tool_name: str, *, cli_seat: bool = False
@@ -408,11 +420,13 @@ class CheckpointEngine:
 
     # -------------------------------------------------------- turn watcher
 
-    async def _watch_turn(self, agent_id: str, session_id: str) -> None:
-        svc = self._chat_service()
-        if svc is None:
-            return
-        queue = svc.subscribe(session_id)
+    async def _watch_turn(
+        self,
+        agent_id: str,
+        session_id: str,
+        queue: asyncio.Queue[dict[str, Any]],
+        svc: Any,
+    ) -> None:
         try:
             agent = await self._runtime.roster.get(agent_id)
             cli_seat = agent is not None and self._cli_seat(agent)
@@ -423,6 +437,11 @@ class CheckpointEngine:
                 except TimeoutError:
                     if not svc.is_running(session_id):
                         break
+                    # The terminal event belongs to a completed turn, even when
+                    # another turn has already taken ownership of the same session.
+                    # Reset the family window before observing that replacement turn.
+                    self.clear_tool_calls(agent_id)
+                    await self.refresh(agent_id)
                     continue
                 kind = event.get("kind")
                 payload = event.get("payload") or {}
@@ -431,7 +450,13 @@ class CheckpointEngine:
                     if name:
                         await self.note_tool_call(agent_id, name, cli_seat=cli_seat)
                 elif kind == "turn_finished":
-                    break
+                    # A replacement turn may already own the same canonical session.
+                    # Reset the previous turn's family window before observing its
+                    # first tool call, but keep this subscription when the session
+                    # is still running so the replacement cannot lose its first call.
+                    self.clear_tool_calls(agent_id)
+                    if not svc.is_running(session_id):
+                        break
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 — the world is a projection; a miss never breaks the turn
@@ -442,7 +467,15 @@ class CheckpointEngine:
             # Runs on the loop even when the task is cancelled during shutdown.
             self._fire(agent_id, "turn")
 
-    def _watcher_done(self, agent_id: str, task: asyncio.Task[None]) -> None:
+    def _watcher_done(
+        self,
+        agent_id: str,
+        task: asyncio.Task[None],
+        svc: Any,
+        session_id: str,
+        queue: asyncio.Queue[dict[str, Any]],
+    ) -> None:
+        svc.unsubscribe(session_id, queue)
         if self._watchers.get(agent_id) is task:
             self._watchers.pop(agent_id, None)
 

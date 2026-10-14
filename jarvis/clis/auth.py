@@ -91,7 +91,9 @@ class CliAuthManager:
 
         for key, value in secrets.items():
             if key not in spec.auth.secret_keys:
-                log.warning("auth: unexpected secret_key '%s' for %s", key, spec.name)
+                # Secret field names cross the same user-input trust boundary as
+                # their values and may themselves contain credential material.
+                log.warning("auth: ignored unexpected secret field for %s", spec.name)
                 continue
             if not value:
                 continue

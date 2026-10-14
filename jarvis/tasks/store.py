@@ -176,6 +176,17 @@ class TaskStore:
         row = await cursor.fetchone()
         return int(row[0]) if row else 0
 
+    async def event_fired_for_subject(self, task_id: str, subject: str) -> bool:
+        """Return whether an event rule already fired for this persisted subject."""
+        cursor = await self._require_conn().execute(
+            "SELECT 1 FROM task_steps WHERE task_id=? AND kind='log' "
+            "AND json_extract(payload_json, '$.event')='event_fired' "
+            "AND json_extract(payload_json, '$.subject')=? LIMIT 1",
+            (task_id, subject),
+        )
+        row = await cursor.fetchone()
+        return row is not None
+
     async def _tasks_table_sql(self) -> str | None:
         conn = self._require_conn()
         cur = await conn.execute(
@@ -331,6 +342,19 @@ class TaskStore:
         )
         return tid
 
+    async def claim_running(self, task_id: str) -> bool:
+        """Atomically claim a scheduled task for one runner invocation."""
+        conn = self._require_conn()
+        now_ns = time.time_ns()
+        cur = await conn.execute(
+            "UPDATE tasks SET state='running', started_at_ns=?, attempts=attempts+1 "
+            "WHERE id=? AND state='scheduled'",
+            (now_ns, task_id),
+        )
+        claimed = cur.rowcount == 1
+        await cur.close()
+        return claimed
+
     async def update_state(
         self,
         task_id: str,
@@ -339,7 +363,8 @@ class TaskStore:
         error: str | None = None,
         result: dict[str, Any] | None = None,
         increment_attempts: bool = False,
-    ) -> None:
+        expected_state: TaskState | None = None,
+    ) -> bool:
         """Transitions to a new state, atomically, with optional error/result info.
 
         Automatically sets ``started_at_ns`` on the transition to ``running``
@@ -375,10 +400,17 @@ class TaskStore:
             sets.append("attempts = attempts + 1")
 
         params.append(task_id)
+        where = " WHERE id = ?"
+        if expected_state is not None:
+            where += " AND state = ?"
+            params.append(expected_state)
         # `sets` is a whitelist of column assignments (built statically
         # above) — no user input flows into the SQL string.
-        sql = f"UPDATE tasks SET {', '.join(sets)} WHERE id = ?"  # noqa: S608
-        await conn.execute(sql, tuple(params))
+        sql = f"UPDATE tasks SET {', '.join(sets)}{where}"  # noqa: S608
+        cur = await conn.execute(sql, tuple(params))
+        changed = cur.rowcount == 1
+        await cur.close()
+        return changed
 
     async def append_step(
         self,
@@ -393,21 +425,24 @@ class TaskStore:
         'retry').
         """
         conn = self._require_conn()
+        # Allocate the per-task sequence inside the INSERT itself. Keeping
+        # MAX(seq) and INSERT as separate statements lets concurrent writers
+        # observe the same next sequence and collide on PRIMARY KEY(task_id, seq).
         cur = await conn.execute(
-            "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM task_steps WHERE task_id = ?",
-            (task_id,),
+            """
+            INSERT INTO task_steps (task_id, seq, kind, payload_json, timestamp_ns)
+            SELECT ?, COALESCE(MAX(seq), 0) + 1, ?, ?, ?
+            FROM task_steps
+            WHERE task_id = ?
+            RETURNING seq
+            """,
+            (task_id, kind, json.dumps(payload, ensure_ascii=False), time.time_ns(), task_id),
         )
         row = await cur.fetchone()
         await cur.close()
-        seq = int(row["max_seq"]) + 1 if row else 1
-        await conn.execute(
-            """
-            INSERT INTO task_steps (task_id, seq, kind, payload_json, timestamp_ns)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (task_id, seq, kind, json.dumps(payload, ensure_ascii=False), time.time_ns()),
-        )
-        return seq
+        if row is None:  # pragma: no cover - aggregate SELECT always yields one row
+            raise RuntimeError("failed to allocate task step sequence")
+        return int(row["seq"])
 
     async def list(
         self,

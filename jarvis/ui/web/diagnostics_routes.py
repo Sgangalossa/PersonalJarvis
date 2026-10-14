@@ -39,11 +39,11 @@ def _task_snapshot(task: asyncio.Task[Any]) -> dict[str, Any]:
     try:
         stack_frames = task.get_stack(limit=_STACK_LIMIT)
         stack = [
-            f"{f.f_code.co_name} ({f.f_code.co_filename}:{f.f_lineno})"
+            f"{f.f_code.co_name} ({f.f_code.co_filename.replace(chr(92), '/').rsplit('/', 1)[-1]}:{f.f_lineno})"
             for f in stack_frames
         ]
-    except Exception as exc:  # noqa: BLE001 — diagnostics must never raise
-        stack = [f"<stack unavailable: {exc}>"]
+    except Exception:  # noqa: BLE001 — diagnostics must never raise
+        stack = ["<stack unavailable>"]
 
     cancelling = 0
     with contextlib.suppress(Exception):  # pre-3.11 or exotic task impl
@@ -54,17 +54,21 @@ def _task_snapshot(task: asyncio.Task[Any]) -> dict[str, Any]:
     with contextlib.suppress(Exception):  # CPython-private, absent elsewhere
         must_cancel = bool(task._must_cancel)  # type: ignore[attr-defined]
         waiter = task._fut_waiter  # type: ignore[attr-defined]
-        fut_waiter = repr(waiter)[:300] if waiter is not None else None
+        fut_waiter = type(waiter).__name__ if waiter is not None else None
 
     exception = None
     if task.done() and not task.cancelled():
         with contextlib.suppress(Exception):
             exc_obj = task.exception()
-            exception = repr(exc_obj)[:300] if exc_obj is not None else None
+            exception = type(exc_obj).__name__ if exc_obj is not None else None
+
+    coro = task.get_coro()
+    coro_code = getattr(coro, "cr_code", None) or getattr(coro, "gi_code", None)
+    coro_name = getattr(coro_code, "co_name", type(coro).__name__)
 
     return {
         "name": task.get_name(),
-        "coro": repr(task.get_coro())[:300],
+        "coro": coro_name,
         "done": task.done(),
         "cancelled": task.cancelled(),
         "cancelling": cancelling,
@@ -120,14 +124,17 @@ async def cancel_scopes() -> dict[str, Any]:
     try:
         from anyio._backends._asyncio import CancelScope  # type: ignore[import-not-found]
     except Exception as exc:  # noqa: BLE001 — anyio absent or reshaped
-        log.opt(exception=exc).warning("anyio backend CancelScope unavailable")
+        log.warning("anyio backend CancelScope unavailable (%s)", type(exc).__name__)
         return {"error": "anyio backend CancelScope unavailable"}
 
     def _task_brief(task: Any) -> str:
         try:
-            return f"{task.get_name()} | {task.get_coro()!r}"[:300]
+            coro = task.get_coro()
+            code = getattr(coro, "cr_code", None) or getattr(coro, "gi_code", None)
+            coro_name = getattr(code, "co_name", type(coro).__name__)
+            return f"{task.get_name()} | {coro_name}"[:300]
         except Exception:  # noqa: BLE001
-            return repr(task)[:300]
+            return type(task).__name__
 
     delivering: list[dict[str, Any]] = []
     total = 0

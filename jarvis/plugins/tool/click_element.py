@@ -1,9 +1,11 @@
-"""click_element tool: click a UIA element by its NAME (and optional role).
+"""click_element tool: click a UIA/AX element by its NAME (and optional role).
 
-Instead of guessing pixel coordinates, this tool observes the live
-UIAutomation tree, finds the matching element, and clicks the center of
-its bounds. This removes the most common computer-use failure mode: the
-planner mentally computing click coordinates from a bounding box.
+Instead of guessing pixel coordinates, this tool observes the live accessibility
+tree, finds the matching element, and activates it semantically on macOS when
+possible. Other hosts, unsupported AX actions, right-clicks, and double-clicks
+use the verified pointer backend. This removes the most common computer-use
+failure mode: the planner mentally computing click coordinates from a bounding
+box.
 
 Matching rules:
   - ``automation_id`` (if given) is an exact match and takes precedence.
@@ -17,7 +19,8 @@ submits, file operations). Toast notification is shown, no approval gate.
 from __future__ import annotations
 
 import asyncio
-import os
+import os as _stdlib_os
+import sys
 from typing import Any
 
 from jarvis.core.protocols import ExecutionContext, ToolResult
@@ -37,6 +40,25 @@ _VALID_BUTTONS = ("left", "right", "middle")
 _MAX_AVAILABLE_NAMES = 15
 
 
+class _PlatformProbe:
+    """Module-local platform seam that cannot mutate ``os.name`` globally.
+
+    The click-element tests override ``click_element.os.name`` to exercise the
+    native and capability-gated branches.  Keeping that seam on a tiny local
+    object is important: assigning to the stdlib ``os.name`` would also change
+    how ``pathlib.Path`` selects its concrete class, which can make pytest
+    instantiate ``WindowsPath``/``PosixPath`` on the wrong host and fail while
+    formatting an otherwise ordinary test failure.
+    """
+
+    name = _stdlib_os.name
+
+
+# Kept as ``os`` for the existing test seam; this is deliberately not the
+# process-wide stdlib ``os`` module.
+os = _PlatformProbe()
+
+
 def _foreground_window_signature() -> tuple[Any, ...]:
     """Re-exported seam for tests; implementation is shared with raw click."""
     return _click_foreground_window_signature()
@@ -48,10 +70,12 @@ class ClickElementTool:
     description: str = (
         "Clicks a UI element identified by its NAME (case-insensitive "
         "substring) and optional role (e.g. Button, Edit, ListItem) or "
-        "automation_id. Observes the live UIAutomation tree and clicks the "
-        "center of the matched element — no pixel coordinates required. "
-        "Prefer this over the raw 'click' tool whenever the target has a "
-        "visible label."
+        "automation_id. Observes the live accessibility tree and activates "
+        "the matched element without model-guessed pixel coordinates. On "
+        "macOS, a normal left click uses native AXPress; editable fields use "
+        "AXFocused when AXPress is unavailable. Only unsupported semantic "
+        "actions fall back to the verified pointer backend. Prefer this over "
+        "the raw 'click' tool whenever the target has a visible label."
     )
     schema: dict[str, Any] = {
         "type": "object",
@@ -60,20 +84,21 @@ class ClickElementTool:
                 "type": "string",
                 "description": (
                     "Element label, matched case-insensitively as a substring "
-                    "of the UIA Name property"
+                    "of the accessibility Name property"
                 ),
             },
             "role": {
                 "type": "string",
                 "description": (
-                    "Optional UIA control type, matched case-insensitively "
+                    "Optional control type, matched case-insensitively "
                     "(e.g. Button, Edit, ListItem)"
                 ),
             },
             "automation_id": {
                 "type": "string",
                 "description": (
-                    "Optional exact AutomationId match (takes precedence over name)"
+                    "Optional exact AutomationId/AXIdentifier match "
+                    "(takes precedence over name)"
                 ),
             },
             "button": {
@@ -233,7 +258,87 @@ class ClickElementTool:
                 ),
             )
 
-        # 5. Click — native on Windows, pyautogui fallback elsewhere.
+        # Human takeover on macOS: hardware-originated events use Quartz's HID
+        # state table, which excludes Jarvis's own synthetic session events.
+        # Check immediately before any semantic OR pointer action so right/
+        # double clicks cannot bypass the handoff guard.
+        if sys.platform == "darwin":
+            from jarvis.cu.actuate import (  # noqa: PLC0415
+                HumanInputTakeover,
+                human_takeover_tool_result,
+                require_human_input_clear,
+            )
+
+            try:
+                await asyncio.to_thread(require_human_input_clear)
+            except HumanInputTakeover as exc:  # expected handoff; structured result resumes CU safely
+                return human_takeover_tool_result(exc)
+
+        # 5. Accessibility-first on macOS. AXPress acts on the semantic control,
+        # not on pixels. Editable controls often expose no AXPress, so AXFocused
+        # is the second semantic path. Only an explicitly unsupported semantic
+        # operation falls back to pointer input; identity/permission failures
+        # fail closed.
+        if sys.platform == "darwin" and button == "left" and not double:
+            from jarvis.cu.actuate import (  # noqa: PLC0415
+                HumanInputTakeover,
+                human_takeover_tool_result,
+                require_human_input_clear,
+            )
+            from jarvis.cu.macos_semantic import try_focus_at, try_press_at
+
+            semantic_kwargs = {
+                "expected_name": matched.name or name_needle,
+                "expected_role": matched.role or role_needle,
+                "expected_automation_id": matched.automation_id or automation_id,
+                "pre_action_check": lambda: _window_signature_matches(
+                    expected_signature,
+                ),
+                "ownership_check": require_human_input_clear,
+            }
+            try:
+                semantic = await asyncio.to_thread(
+                    try_press_at,
+                    cx,
+                    cy,
+                    **semantic_kwargs,
+                )
+            except HumanInputTakeover as exc:  # expected handoff; structured result resumes CU safely
+                return human_takeover_tool_result(exc)
+            if semantic.performed:
+                return ToolResult(
+                    success=True,
+                    output=(
+                        f"Activated {matched.role or 'element'} '{matched.name}' "
+                        "with native macOS AXPress"
+                    ),
+                )
+            if semantic.status != "unsupported":
+                return ToolResult(success=False, output=None, error=semantic.detail)
+
+            if (matched.role or role_needle).casefold() == "edit":
+                try:
+                    focused = await asyncio.to_thread(
+                        try_focus_at,
+                        cx,
+                        cy,
+                        **semantic_kwargs,
+                    )
+                except HumanInputTakeover as exc:  # expected handoff; structured result resumes CU safely
+                    return human_takeover_tool_result(exc)
+                if focused.performed:
+                    return ToolResult(
+                        success=True,
+                        output=(
+                            f"Focused Edit '{matched.name}' with native macOS AXFocused"
+                        ),
+                    )
+                if focused.status != "unsupported":
+                    return ToolResult(success=False, output=None, error=focused.detail)
+
+        # 6. Verified pointer fallback — native on Windows, capability-gated
+        # elsewhere. On macOS this is used only when semantic activation/focus
+        # is unsupported or the requested gesture is not a normal left click.
         if os.name == "nt":
             try:
                 await asyncio.to_thread(
@@ -251,17 +356,18 @@ class ClickElementTool:
                     error=f"Click on '{matched.name}' at ({cx},{cy}) failed: {exc}",
                 )
         else:
-            # Capability probe instead of a raw pyautogui import: Wayland /
-            # headless / missing-deps hosts get the actionable
-            # ActuationUnavailable message (§3 honest degradation).
-            from jarvis.cu.actuate.base import (
+            from jarvis.cu.actuate import (
                 ActuationUnavailable,
+                HumanInputTakeover,
                 get_actuator,
+                human_takeover_tool_result,
                 verified_click,
             )
 
             try:
                 actuator = get_actuator()
+            except HumanInputTakeover as exc:  # expected handoff; structured result resumes CU safely
+                return human_takeover_tool_result(exc)
             except ActuationUnavailable as exc:
                 return ToolResult(success=False, output=None, error=str(exc))
             try:
@@ -280,10 +386,12 @@ class ClickElementTool:
                     return ToolResult(
                         success=False, output=None, error=landing.detail,
                     )
+            except HumanInputTakeover as exc:  # expected handoff; structured result resumes CU safely
+                return human_takeover_tool_result(exc)
             except Exception as exc:  # noqa: BLE001
                 return ToolResult(success=False, output=None, error=str(exc))
 
-        # 6. Success.
+        # 7. Success.
         return ToolResult(
             success=True,
             output=f"Clicked {role_needle or 'element'} '{matched.name}' at ({cx},{cy})",

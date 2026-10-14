@@ -222,16 +222,15 @@ class AtomicWriter:
             # A body that contains an API key, bearer token, password, or
             # other opaque credential must never reach disk or the FTS
             # index. Regex-only, no LLM. Archive ops carry no meaningful
-            # body, so only create/update/rename are screened. We log the
-            # pattern *names* only, never the matched value.
+            # body, so only create/update/rename are screened. The
+            # diagnostic is deliberately constant: neither matched categories
+            # nor target paths are logged.
             if upd.operation != "archive":
                 hits = find_secrets(upd.new_body)
                 if hits:
                     log.warning(
-                        "atomic_writer: refusing write to %s — body matched "
-                        "secret/PII patterns %s (AP-2)",
-                        target,
-                        hits,
+                        "atomic_writer: refusing write because body matched "
+                        "secret/PII policy (AP-2)"
                     )
                     telemetry.inc("wiki_writes_blocked_pii")
                     blocked.append(target)

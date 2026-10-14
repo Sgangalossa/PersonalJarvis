@@ -546,7 +546,7 @@ async def _run_headless(args) -> int:
     except Exception as exc:  # noqa: BLE001 — never block boot on key bootstrap
         import logging as _logging
 
-        _logging.getLogger(__name__).warning("Control API key bootstrap skipped: %s", exc)
+        _logging.getLogger(__name__).warning("Control API key bootstrap skipped (%s)", type(exc).__name__)
 
     def _reconcile_autostart_bg() -> None:
         try:
@@ -2132,22 +2132,20 @@ def _main(argv: list[str] | None = None) -> int:
 
     # Per-user Jarvis Control API key — generate-once BEFORE the app serves so
     # it exists by the time a local agent (Codex CLI / Claude Code) hits
-    # /api/control/*. Idempotent; never blocks boot. The clear value is only
-    # ever revealed via the loopback Settings panel / the key file — we log the
-    # masked form here so the key never lands in a logfile.
+    # /api/control/*. Idempotent; never blocks boot. The value and all
+    # derivatives stay out of diagnostics; the loopback Settings panel and key
+    # file are the only reveal surfaces.
     try:
         from jarvis.core import control_key
 
-        _ck = control_key.ensure_control_key()
+        control_key.ensure_control_key()
         import logging as _logging
 
-        _logging.getLogger(__name__).info(
-            "Jarvis Control API key ready (%s)", control_key.mask_control_key(_ck)
-        )
+        _logging.getLogger(__name__).info("Jarvis Control API key ready")
     except Exception as exc:  # noqa: BLE001 — never block boot on key bootstrap
         import logging as _logging
 
-        _logging.getLogger(__name__).warning("Control API key bootstrap skipped: %s", exc)
+        _logging.getLogger(__name__).warning("Control API key bootstrap skipped (%s)", type(exc).__name__)
     _m_mark("control_key")
 
     # Self-healing login autostart (the 7th cross-platform port). Runs once at

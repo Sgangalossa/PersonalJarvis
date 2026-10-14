@@ -120,3 +120,26 @@ def test_event_loop_lag_returns_measurements():
         body = client.get("/api/diagnostics/event-loop-lag").json()
     assert len(body["lags_ms"]) == 4
     assert body["max_ms"] >= 0.0
+
+
+def test_task_snapshot_redacts_exception_text_and_private_paths() -> None:
+    import asyncio
+
+    from jarvis.ui.web.diagnostics_routes import _task_snapshot
+
+    async def fail_with_sensitive_detail() -> None:
+        raise RuntimeError("api_key=super-secret-token at /home/private/user")
+
+    async def run() -> dict[str, object]:
+        task = asyncio.create_task(fail_with_sensitive_detail(), name="diagnostic-redaction")
+        try:
+            await task
+        except RuntimeError:
+            pass
+        return _task_snapshot(task)
+
+    snapshot = asyncio.run(run())
+    assert snapshot["exception"] == "RuntimeError"
+    assert "super-secret-token" not in repr(snapshot)
+    assert "/home/private/user" not in repr(snapshot)
+    assert snapshot["coro"] == "fail_with_sensitive_detail"

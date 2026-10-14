@@ -279,8 +279,8 @@ _FAILURE_REASON_MAX_CHARS = 160
 # (``_lookup_facts``). Three search variants return up to fifteen rows between
 # them; the answer to a spoken question lives in the first few, and everything
 # past that is prompt weight paid on the turn-critical path for nothing.
-_LOOKUP_FACT_MAX_ITEMS = 50
-_LOOKUP_FACT_MAX_CHARS = 4_000
+_LOOKUP_FACT_MAX_ITEMS = 5
+_LOOKUP_FACT_MAX_CHARS = 320
 # A delegated turn fails for a handful of KNOWN internal reasons, and the raw
 # internal strings are engineering vocabulary ("No configured Tool Model
 # completed the delegated turn.") that must never be spoken. Each cause maps to
@@ -10682,12 +10682,9 @@ class RealtimeVoiceSession:
             if not swapped:
                 return
             log.warning(
-                "realtime[%s] readback named %s, which the trusted result does "
-                "not mention — spoken: %s | result: %s",
+                "realtime[%s] readback identifier swap detected (%d item(s))",
                 self.session_id,
-                ", ".join(swapped),
-                safe_preview(rendering, max_chars=200),
-                safe_preview(trusted, max_chars=200),
+                len(swapped),
             )
             await self._publish_error(
                 "readback_identifier_swap",

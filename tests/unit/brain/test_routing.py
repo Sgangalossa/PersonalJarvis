@@ -1870,6 +1870,7 @@ def test_router_tools_is_pure_dispatcher_set() -> None:
             "create-skill",
             # Phase B5 (recall-tool): read-only keyword search over the wiki vault.
             "wiki-recall",
+            "schedule-task",
             # Phase B5 follow-up (commit 825b1f94a): full-page reader (read-only)
             # + deterministic ingest (write via WikiCurator). Both router-tier only.
             "wiki-page-read",

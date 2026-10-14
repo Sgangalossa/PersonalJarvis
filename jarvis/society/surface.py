@@ -47,7 +47,7 @@ from .communication import COMMUNICATION_GUIDANCE
 from .conversation_tool import ConversationRecallTool, RoutineInvokeTool, RoutineListTool
 from .learning import RunLearnedSkillTool
 from .memory import resolve_society_vault
-from .roster import AgentRecord, canonical_session_id
+from .roster import LEAD_AGENT_ID, AgentRecord, canonical_session_id
 from .routine_runner import is_routine_session
 from .runtime import current_runtime
 
@@ -287,6 +287,7 @@ async def _scoped_tool_for_session(session_id: str, capability: str) -> Tool | N
             capability,
             _effective_approval_mode(agent, session, _permission_override(rt, session)),
             rt,
+            session_id=session_id,
         ),
     )
 
@@ -417,12 +418,18 @@ class _GatedTool:
         capability_id: str,
         approval_mode: str | None,
         runtime: Any,
+        *,
+        session_id: str = "",
     ) -> None:
         self._inner = inner
         self._agent = agent
         self._capability_id = capability_id
         self._approval_mode = approval_mode
         self._runtime = runtime
+        self._session_id = session_id
+        self._base_inner_risk_tier = inner.risk_tier
+        self._base_inner_is_action_tool = getattr(inner, "is_action_tool", None)
+        self._base_inner_read_only = getattr(inner, "_read_only", None)
         self.name = inner.name
         self.description = inner.description
         self.schema = inner.schema
@@ -464,14 +471,115 @@ class _GatedTool:
         return "monitor" if base == "ask" else base
 
     async def execute(self, args: dict[str, Any], ctx: Any) -> Any:
-        # The catalog was selected at turn start. A pause or kill switch that
-        # arrives while the model is thinking must still stop its next call.
+        # The catalog was selected at turn start. A pause, grant change or
+        # session-mode change that arrives while the model is thinking must still
+        # stop or narrow its next call.
         if await self._runtime.store.kill_switch():
             return ToolResult(False, {"reason": "kill_switch"}, "the society is halted")
         live = await self._runtime.roster.get(self._agent.agent_id)
         if live is None or str(live.state) != "active":
             return ToolResult(
                 False, {"reason": "blocked_by_policy"}, "caller is not an active agent"
+            )
+
+        session = None
+        service = self._runtime.chat_service()
+        if service is not None and self._session_id:
+            store = getattr(service, "store", None)
+            getter = getattr(store, "get_session", None)
+            if callable(getter):
+                session = getter(self._session_id)
+                surface = str(getattr(session, "surface", ""))
+                session_agent = agent_id_of(self._session_id)
+                valid_society = surface == SURFACE and session_agent == live.agent_id
+                valid_lead = (
+                    surface == "jarvis"
+                    and session_agent is None
+                    and live.agent_id == LEAD_AGENT_ID
+                )
+                if not (valid_society or valid_lead):
+                    return ToolResult(
+                        False,
+                        {"reason": "blocked_by_policy"},
+                        "caller session is no longer valid",
+                    )
+
+        selected = select_tools(
+            {self.name: self._inner},
+            grant_mode=str(live.grant_mode),
+            grants=live.grants,
+            focus=live.focus,
+            denies=live.denies,
+        )
+        if self.name not in selected:
+            return ToolResult(
+                False,
+                {"reason": "blocked_by_policy"},
+                "this capability is no longer granted to the agent",
+            )
+
+        if session is not None:
+            mode = str(getattr(session, "permission_mode", "") or "")
+            if mode in ("plan", "read-only") and self._capability_id != "core:browser":
+                return ToolResult(
+                    False,
+                    {"reason": "blocked_by_policy"},
+                    "session is now read-only",
+                )
+            if self._capability_id == "core:browser":
+                restricted = mode in ("plan", "read-only")
+                if hasattr(self._inner, "_read_only") and self._base_inner_read_only is not None:
+                    self._inner._read_only = bool(self._base_inner_read_only or restricted)
+                if hasattr(self._inner, "risk_tier"):
+                    self._inner.risk_tier = (
+                        "safe" if restricted else str(self._base_inner_risk_tier or "monitor")
+                    )
+                if (
+                    hasattr(self._inner, "is_action_tool")
+                    and self._base_inner_is_action_tool is not None
+                ):
+                    self._inner.is_action_tool = (
+                        False if restricted else bool(self._base_inner_is_action_tool)
+                    )
+
+        from .approvals import Verdict, decide
+
+        base = str(getattr(self._inner, "risk_tier", "monitor") or "monitor")
+        hook = getattr(self._inner, "risk_tier_for_args", None)
+        if callable(hook):
+            try:
+                own = hook(args)
+            except Exception:  # noqa: BLE001 - a broken inner hook cannot widen access
+                own = None
+            if isinstance(own, str) and own:
+                base = own
+        approval_mode = (
+            _effective_approval_mode(
+                live,
+                session,
+                _permission_override(self._runtime, session),
+            )
+            if session is not None
+            else str(live.approval_mode or "")
+        )
+        verdict = decide(
+            live,
+            self._capability_id,
+            base,
+            verb=_verb_of(args),
+            approval_mode=approval_mode,
+        )
+        if verdict is Verdict.BLOCK:
+            return ToolResult(
+                False,
+                {"reason": "blocked_by_policy"},
+                "the current permission policy blocks this action",
+            )
+        if verdict is Verdict.QUEUE and getattr(ctx, "approved_by", None) != "user":
+            return ToolResult(
+                False,
+                {"reason": "approval_required"},
+                "the current permission policy requires fresh approval",
             )
         return await self._inner.execute(args, ctx)
 
@@ -629,7 +737,17 @@ def society_tool_filter(session: Any) -> Callable[[dict[str, Tool]], dict[str, T
         # The gate rides on the executor's per-call tier hook, so the chat
         # card and the queue stay the one approval path.
         picked = {
-            name: cast(Tool, _GatedTool(tool, agent, cap_id, approval_mode, rt))
+            name: cast(
+                Tool,
+                _GatedTool(
+                    tool,
+                    agent,
+                    cap_id,
+                    approval_mode,
+                    rt,
+                    session_id=str(getattr(session, "session_id", "") or ""),
+                ),
+            )
             for name, tool in picked.items()
             if (cap_id := capability_id_for_tool(name)) is not None
         }
@@ -645,6 +763,7 @@ def society_tool_filter(session: Any) -> Callable[[dict[str, Tool]], dict[str, T
                             capability_id_for_tool(name) or "core:society",
                             approval_mode,
                             rt,
+                            session_id=str(getattr(session, "session_id", "") or ""),
                         ),
                     )
                     for name, tool in own.items()

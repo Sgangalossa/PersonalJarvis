@@ -21,6 +21,7 @@ wall-clock).
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -29,7 +30,12 @@ from uuid import uuid4
 import pytest
 
 from jarvis.core.bus import EventBus
-from jarvis.core.events import LatencyPhase, LatencyTurnComplete
+from jarvis.core.events import (
+    AnnouncementRequested,
+    LatencyPhase,
+    LatencyTurnComplete,
+    SpeechSpoken,
+)
 from jarvis.core.protocols import AudioChunk, Transcript
 from jarvis.speech.pipeline import SpeechPipeline
 from jarvis.telemetry.latency import LatencyTracker
@@ -144,6 +150,62 @@ async def test_brain_streaming_marks_full_phase_ladder() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("confirmed", "instant_ack", "replace_tracker", "broken_tracker"),
+    [
+        (True, True, False, False),
+        (False, True, False, False),
+        (True, False, False, False),
+        (True, True, True, False),
+        (True, True, False, True),
+    ],
+)
+async def test_ack_receipt_is_scoped_and_does_not_break_transcript(
+    confirmed: bool, instant_ack: bool, replace_tracker: bool, broken_tracker: bool,
+) -> None:
+    bus = EventBus()
+    pipeline = _make_streaming_pipeline(bus)
+    tracker = LatencyTracker(None, uuid4())
+    next_tracker = LatencyTracker(None, uuid4())
+    received: list[SpeechSpoken] = []
+
+    async def capture(event: SpeechSpoken) -> None:
+        received.append(event)
+
+    class BrokenTracker:
+        def mark(self, phase: LatencyPhase) -> None:
+            raise RuntimeError("telemetry unavailable")
+
+    class ReceiptPlayer:
+        async def play_chunks(self, chunks, *, should_play=None) -> bool:
+            assert LatencyPhase.ACK_PLAYBACK_CONFIRMED not in tracker.stages_snapshot()
+            async for _ in chunks:
+                pass
+            if replace_tracker:
+                pipeline._latency_tracker = next_tracker
+            return confirmed
+
+    bus.subscribe(SpeechSpoken, capture)
+    pipeline._player = ReceiptPlayer()  # type: ignore[assignment]
+    pipeline._latency_tracker = BrokenTracker() if broken_tracker else tracker
+    # Identical words on an unrelated source must not count as an instant ack.
+    pipeline._instant_ack_spoken_text = "I'm checking the records."
+    await pipeline._on_announcement(AnnouncementRequested(
+        text="I'm checking the records.", language="en", kind="preamble",
+        source_layer="brain.instant_ack" if instant_ack else "test.unrelated",
+    ))
+    if confirmed:
+        assert await _settle(lambda: len(received) == 1)
+    else:
+        await asyncio.sleep(0.01)
+
+    expected_mark = confirmed and instant_ack and not replace_tracker and not broken_tracker
+    assert (LatencyPhase.ACK_PLAYBACK_CONFIRMED in tracker.stages_snapshot()) == expected_mark
+    assert LatencyPhase.ACK_PLAYBACK_CONFIRMED not in next_tracker.stages_snapshot()
+    assert len(received) == int(confirmed)
+
+
+@pytest.mark.asyncio
 async def test_handle_utterance_publishes_latency_turn_complete() -> None:
     """A completed voice turn must flush exactly one ``LatencyTurnComplete``
     carrying the stage snapshot — this is what feeds state/latency_log.jsonl."""
@@ -164,6 +226,7 @@ async def test_handle_utterance_publishes_latency_turn_complete() -> None:
         ),
         latency=None,
     )
+    pipeline._session_wake_latency_anchor_ns = time.perf_counter_ns() - 50_000_000
 
     # Single-turn mode returns False ("session may close") on a COMPLETED
     # turn — completion is proven by the player having spoken both sentences.
@@ -180,10 +243,51 @@ async def test_handle_utterance_publishes_latency_turn_complete() -> None:
     event = received[0]
     stages = dict(event.stages_ms)
     assert LatencyPhase.STT_FINALIZE.value in stages
+    assert LatencyPhase.INTENT_DECISION.value in stages
+    assert stages[LatencyPhase.STT_FINALIZE.value] < 50.0
+    assert received[0].wake_to_intent_e2e_ms is not None
+    assert received[0].wake_to_intent_e2e_ms >= 50.0
     assert LatencyPhase.TTS_STREAM_DONE.value in stages
     assert event.anchor_ns > 0
     tracker = pipeline._latency_tracker
     assert tracker is not None and event.trace_id == tracker.trace_id
+
+
+@pytest.mark.asyncio
+async def test_wake_anchor_survives_a_wake_only_turn() -> None:
+    bus = EventBus()
+    received: list[LatencyTurnComplete] = []
+
+    async def capture(event: LatencyTurnComplete) -> None:
+        received.append(event)
+
+    class WakeOnlySTT:
+        async def transcribe_pcm(self, _pcm: bytes) -> Transcript:
+            return Transcript(
+                text="hey jarvis", language="en", confidence=0.95, is_partial=False,
+            )
+
+    bus.subscribe(LatencyTurnComplete, capture)
+    pipeline = _make_streaming_pipeline(bus)
+    pipeline._utterance_stt = WakeOnlySTT()  # type: ignore[assignment]
+    pipeline._config = SimpleNamespace(
+        performance=SimpleNamespace(streaming_tts=True, tts_lookahead_sentences=1),
+        latency=None,
+    )
+    anchor_ns = time.perf_counter_ns() - 60_000_000
+    pipeline._session_wake_latency_anchor_ns = anchor_ns
+
+    await pipeline._handle_utterance(b"\x00\x00" * 1600, skip_completion=True)
+    assert pipeline._session_wake_latency_anchor_ns == anchor_ns
+    assert await _settle(lambda: len(received) == 1)
+    assert received[0].wake_to_intent_e2e_ms is None
+
+    pipeline._utterance_stt = _FixedSTT()  # type: ignore[assignment]
+    await pipeline._handle_utterance(b"\x00\x00" * 1600, skip_completion=True)
+    assert pipeline._session_wake_latency_anchor_ns is None
+    assert await _settle(lambda: len(received) == 2)
+    assert received[1].wake_to_intent_e2e_ms is not None
+    assert received[1].wake_to_intent_e2e_ms >= 60.0
 
 
 @pytest.mark.asyncio

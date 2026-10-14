@@ -1132,6 +1132,8 @@
       "when_mission_succeeded": "Eine Mission ist fertig",
       "when_mission_failed": "Eine Mission scheitert",
       "when_mission_cancelled": "Eine Mission wird abgebrochen",
+      "when_github_pr_merged": "Ein GitHub-PR wird gemergt",
+      "when_github_pr_merged_hint": "Verwendet einen signierten GitHub-Webhook. Öffne nach dem Erstellen die Trigger-Verbindung und hinterlege in Jarvis und GitHub dasselbe Signatur-Secret.",
       "then_label": "Dann",
       "then_computer_use": "Computer-Use",
       "then_agent": "Agenten-Aufgabe",
@@ -1363,6 +1365,10 @@
     "create": "Skill erstellen",
     "no_results": "Keine Skills gefunden.",
     "draft_badge": "Entwurf",
+    "review_draft": "Prüfen",
+    "approve_draft": "Genehmigen & aktivieren",
+    "review_draft_title": "Dieser Entwurf muss geprüft werden",
+    "review_draft_body": "Prüfe unten die Anweisungen und Auslöser. Er kann erst ausgeführt werden, nachdem du ihn genehmigt hast.",
     "active_badge": "Aktiv",
     "disabled_badge": "Deaktiviert",
     "validated_badge": "Validiert",
@@ -3710,7 +3716,9 @@
     "prompt_not_submitted": "der Prompt steht im Eingabefeld, abgeschickt wurde er nicht",
     "prompt_unconfirmed": "der Prompt wurde eingetippt, aber das Pane hat den Empfang nicht sichtbar gezeigt – bitte dort nachsehen",
     "dictation_nowhere": "Es war kein Textfeld aktiv, deshalb wurde das Diktat nicht eingefügt. Es steht in der Diktat-Historie.",
-    "realtime_provider_issue": "Der Realtime-Anbieter meldet ein Problem."
+    "realtime_provider_issue": "Der Realtime-Anbieter meldet ein Problem.",
+    "society_approval_attention_one": "Eine Agent-Freigabe braucht deine Aufmerksamkeit.",
+    "society_approval_attention_many": "{0} Agent-Freigaben brauchen deine Aufmerksamkeit."
   },
   "chat_thread": {
     "message_to": "Nachricht an",
@@ -4870,6 +4878,7 @@
     "area": {
       "all": "Gesamt",
       "jarvis": "{name}",
+      "society": "Society",
       "agentic_ide": "Agentic IDE",
       "jarvis_voice": "{name} Voice"
     },
@@ -5008,6 +5017,7 @@
       "background": "Im Hintergrund",
       "voice": "Sprache",
       "agent_chat": "Agenten-Chat",
+      "society": "Society",
       "mission": "Mission",
       "agentic_ide": "Agentic IDE",
       "jarvis_voice": "{name} Voice"
@@ -5342,6 +5352,9 @@
       "chat": "Chat",
       "hands": "Hände",
       "learned": "Gelernt",
+      "learned_review_hint": "Private gelernte Skills bleiben Hinweise. Schick einen als Entwurf zu Skills, um ihn vor der globalen Aktivierung zu prüfen.",
+      "learned_review": "In Skills prüfen",
+      "learned_reviewing": "Entwurf wird vorbereitet…",
       "limits": "Grenzen",
       "budget_hint": "Der Verteiler gibt keinen Auftrag mehr, sobald die Tagesausgaben das erreichen.",
       "budget_cap": "Tagesbudget begrenzen",

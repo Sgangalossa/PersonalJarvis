@@ -727,7 +727,43 @@ def _fresh_launch_state(monkeypatch) -> list[dict[str, Any]]:
     monkeypatch.setattr(LocalRealtimeProvider, "_last_launch_at", float("-inf"))
     spawned: list[dict[str, Any]] = []
 
-    def fake_popen(command: Any, **kwargs: Any) -> SimpleNamespace:
+    class _FakeSecurityProcess:
+        """A failed, non-interactive Keychain CLI result for subprocess.run."""
+
+        returncode = 1
+
+        def __init__(self, args: Any) -> None:
+            self.args = args
+
+        def __enter__(self) -> _FakeSecurityProcess:
+            return self
+
+        def __exit__(self, *exc_info: Any) -> bool:
+            self.wait()
+            return False
+
+        def communicate(
+            self, input: Any = None, timeout: float | None = None
+        ) -> tuple[bytes, bytes]:
+            del input, timeout
+            return b"", b"Keychain CLI disabled in unit test"
+
+        def poll(self) -> int:
+            return self.returncode
+
+        def wait(self, timeout: float | None = None) -> int:
+            del timeout
+            return self.returncode
+
+    def fake_popen(command: Any, **kwargs: Any) -> Any:
+        # subprocess.run uses Popen internally too. Do not mistake an attempted
+        # macOS Keychain read for the local realtime server spawn being counted.
+        if (
+            isinstance(command, (list, tuple))
+            and command
+            and str(command[0]).endswith("/security")
+        ):
+            return _FakeSecurityProcess(command)
         spawned.append({"command": command, **kwargs})
         return SimpleNamespace(pid=4711)
 

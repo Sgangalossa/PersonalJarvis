@@ -122,6 +122,20 @@
       "model_saving": "Wird gespeichert…",
       "model_apply": "Modell übernehmen"
     },
+    "ledger": {
+      "title": "Society-Ledger",
+      "subtitle": "Dauerhafte Historie aus dem Ereignisprotokoll der Society.",
+      "empty": "Noch keine Society-Ereignisse.",
+      "error": "Das Society-Ledger konnte nicht geladen werden.",
+      "time": "Zeit",
+      "type": "Typ",
+      "from": "Von",
+      "to": "An",
+      "detail": "Details",
+      "cost": "Kosten",
+      "total_cost": "Erfasste Modellkosten",
+      "board": "Board"
+    },
     "world": {
       "talk_kind_query": "fragt",
       "talk_kind_answer": "antwortet",
@@ -539,7 +553,9 @@
         "blocked": "Trigger blockiert"
       },
       "filtered": "Die Eingabe passt nicht zu den Filtern.",
-      "duplicate": "Die Eingabe wurde bereits empfangen."
+      "duplicate": "Die Eingabe wurde bereits empfangen.",
+      "event_filter": "Ereignisfilter (optional)",
+      "event_fields": "Erlaubte Ereignisfelder"
     },
     "browser_live": {
       "live": "Live",
@@ -730,6 +746,7 @@
       "viewport": "Jarvis Verse",
       "loading": "Das Jarvis Verse wird geöffnet…",
       "no_graphics": "3D-Darstellung ist hier nicht verfügbar. Den Status aller Agenten siehst du weiterhin in der Agentenliste.",
+      "reduced_motion": "Bewegungen reduzieren ist aktiviert. Die animierte 3D-Etage ist pausiert; im Protokoll bleibt dieselbe Agentenaktivität ohne Bewegung verfügbar.",
       "count_working": "{0} arbeiten",
       "count_waiting": "{0} warten",
       "count_idle": "{0} frei",
@@ -739,7 +756,7 @@
       "state_paused": "Pausiert",
       "open_agent": "{0} öffnen",
       "overview": "Übersicht",
-      "ledger": "Agentenliste",
+      "ledger": "Protokoll öffnen",
       "help": "WASD laufen · Shift rennt · Leertaste springt · E benutzen · M Karte · H Hilfe & Einstellungen",
       "sample": "Beispiel-Agenten – das Backend ist noch nicht erreichbar.",
       "overflow": "Nur die ersten {0} Agenten haben einen Schreibtisch; die Liste zeigt alle.",
@@ -1160,6 +1177,25 @@
       "errand_flying": "Bringt {0} eine Aufgabe",
       "errand_task": "Hier ist eine neue Aufgabe für dich.",
       "errand_ack": "Verstanden, bin dran!"
+    },
+    "card": {
+      "learned_review_hint": "Gelernte private Skills bleiben beratende Anweisungen. Sende einen als Entwurf an Skills, um ihn vor der globalen Aktivierung zu prüfen.",
+      "learned_review": "In Skills prüfen",
+      "learned_reviewing": "Entwurf wird vorbereitet…",
+      "shared_figures": "Geteilter Avatar-Katalog"
+    },
+    "screen": {
+      "title": "Isolierter Bildschirm",
+      "hint": "Ein privater Agent-Desktop. Er greift niemals auf deinen physischen Bildschirm zurück.",
+      "loading": "Verfügbarkeit wird geprüft…",
+      "open": "Isolierten Bildschirm öffnen",
+      "opening": "Wird geöffnet…",
+      "close": "Isolierten Bildschirm schließen",
+      "closing": "Wird geschlossen…",
+      "active": "Aktiver Bildschirm",
+      "isolated": "isoliert",
+      "unavailable": "Nicht verfügbar",
+      "load_error": "Bildschirmstatus konnte nicht geladen werden."
     }
   }
 }

@@ -53,9 +53,9 @@ path is the only route in, and the express key is the exception.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import os
+import secrets
 import threading
 import time
 from dataclasses import dataclass, replace
@@ -107,11 +107,22 @@ _PROBE_TIMEOUT_S = 5.0
 
 _ROUTE_CACHE: dict[str, KeyRoute] = {}
 _CACHE_LOCK = threading.Lock()
+# Fingerprints only need process-local stability. A random HKDF salt prevents
+# offline comparison if a short fingerprint ever appears in diagnostics.
+_FINGERPRINT_SALT = secrets.token_bytes(32)
 
 
 def _fingerprint(api_key: str) -> str:
-    """Non-reversible cache/log identity for a key (first 12 hex of SHA-256)."""
-    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:12]
+    """Return a process-local, non-reversible cache/log identity for a key."""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+    return HKDF(
+        algorithm=hashes.SHA256(),
+        length=6,
+        salt=_FINGERPRINT_SALT,
+        info=b"jarvis-google-route-v1",
+    ).derive(api_key.encode("utf-8")).hex()
 
 
 def classify_google_key(api_key: str) -> KeyRoute | None:

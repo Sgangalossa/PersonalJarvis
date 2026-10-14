@@ -1,6 +1,8 @@
-"""Admin password hashing: salted scrypt, legacy SHA-256 still accepted."""
+"""Admin password hashing: salted scrypt with legacy SHA-256 fail-closed."""
 
 from __future__ import annotations
+
+import logging
 
 from jarvis.core.admin_password import (
     check_admin_pass,
@@ -37,11 +39,12 @@ def test_empty_inputs_lock_admin_mode() -> None:
     assert not check_admin_pass("x", None)
 
 
-def test_legacy_sha256_hash_still_verifies() -> None:
+def test_legacy_sha256_hash_locks_admin_until_rehashed(caplog) -> None:
     assert is_legacy_hash(_LEGACY)
-    assert verify_admin_password("legacy-pass", _LEGACY)
-    assert verify_admin_password("legacy-pass", _LEGACY.upper())
-    assert not verify_admin_password("other", _LEGACY)
+    with caplog.at_level(logging.WARNING):
+        assert not verify_admin_password("legacy-pass", _LEGACY)
+        assert not verify_admin_password("legacy-pass", _LEGACY.upper())
+    assert "python -m jarvis.core.admin_password" in caplog.text
 
 
 def test_malformed_or_hostile_hash_is_rejected() -> None:

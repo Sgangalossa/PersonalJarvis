@@ -61,6 +61,18 @@ def _client(data_dir: Path) -> TestClient:
     return TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def _no_background_cli_index(monkeypatch: pytest.MonkeyPatch) -> None:
+    from jarvis.ui.web import costs_routes
+
+    # Each summary request would start the background CLI-usage indexer, which
+    # reads this machine's real vendor transcripts and writes
+    # cli_usage_index.db into the sandbox on its own thread. Whether that file
+    # existed by the time ``sources_present`` was read was a race that failed
+    # the suite depending on test order. The indexer has its own coverage.
+    monkeypatch.setattr(costs_routes._refresher, "nudge", lambda _data_dir: None)
+
+
 @pytest.fixture()
 def client(tmp_path: Path) -> TestClient:
     _seed(tmp_path / "data")
@@ -102,6 +114,34 @@ def test_ref_filter_isolates_one_session(client: TestClient) -> None:
 def test_comma_separated_filters_are_accepted(client: TestClient) -> None:
     body = client.get("/api/costs/summary?days=30&provider=anthropic,gemini-live").json()
     assert body["totals"]["entries"] == 2
+
+
+def test_entries_expose_account_id(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from jarvis.costs.model import CostEntry
+    from jarvis.ui.web import costs_routes
+
+    entry = CostEntry(
+        ts_ms=NOW_MS,
+        surface="agentic-ide",
+        role="agent",
+        provider="claude-cli",
+        model="claude-opus-5",
+        tokens_in=100,
+        tokens_out=20,
+        tokens_cached=0,
+        cost_usd=0.0,
+        price_source="subscription",
+        ref_id="vendor-session-1",
+        label="Claude work",
+        runner="claude-cli",
+        account_id="claude:work",
+    )
+    monkeypatch.setattr(costs_routes._cache, "get", lambda *args, **kwargs: [entry])
+
+    body = client.get("/api/costs/entries?days=30").json()
+
+    assert body["total"] == 1
+    assert body["items"][0]["account_id"] == "claude:work"
 
 
 def test_entries_sort_and_paginate(client: TestClient) -> None:

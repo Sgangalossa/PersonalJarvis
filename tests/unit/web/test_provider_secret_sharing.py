@@ -20,10 +20,10 @@ def test_openai_key_is_shared_across_multiple_surfaces() -> None:
 
 
 def test_realtime_openai_slot_names_its_fallback_family() -> None:
-    # The runtime chain for the openai family cross-reads the realtime slot,
-    # so deleting it must at least name the realtime + openai surfaces.
+    # The runtime chain retains the legacy realtime slot as a compatibility
+    # fallback, even though the public provider card is now named openai-live.
     consumers = secret_slot_consumers("realtime_openai_api_key")
-    assert get_spec("openai-realtime").label in consumers
+    assert "openai-realtime" in consumers
     assert get_spec("openai").label in consumers
 
 

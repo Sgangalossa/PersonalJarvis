@@ -5153,12 +5153,14 @@ def _mark_secret_changed(key: str) -> None:
     for listener in listeners:
         try:
             listener(key)
-        except Exception:  # noqa: BLE001 — the credential IS saved; a follower failing must not undo that
+        except Exception as exc:  # noqa: BLE001 — the credential IS saved; a follower failing must not undo that
+            # Listener exceptions can contain provider responses or credential
+            # values. Keep the diagnostic useful without logging their message
+            # or traceback into the application log.
+            # `key` is only the credential-slot identifier, never its stored value.
             logging.getLogger(__name__).warning(
-                "secret-change listener %r failed for slot %s",
-                getattr(listener, "__qualname__", listener),
-                key,
-                exc_info=True,
+                "secret-change listener failed (%s)",
+                type(exc).__name__,
             )
 
 

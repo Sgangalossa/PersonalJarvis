@@ -50,13 +50,14 @@ class SocietyBus:
             *(self._safe_dispatch(h, envelope) for h in handlers), return_exceptions=True
         )
 
-    @staticmethod
-    async def _safe_dispatch(handler: SocietyHandler, envelope: SocietyEnvelope) -> None:
+    async def _safe_dispatch(self, handler: SocietyHandler, envelope: SocietyEnvelope) -> None:
         try:
             await asyncio.wait_for(handler(envelope), timeout=_HANDLER_TIMEOUT_S)
         except TimeoutError:
+            if handler in self._handlers:
+                self._handlers.remove(handler)
             log.warning(
-                "society bus: subscriber %s timed out (>%ss) on %s seq=%s and was abandoned",
+                "society bus: subscriber %s timed out (>%ss) on %s seq=%s and was unsubscribed",
                 getattr(handler, "__qualname__", repr(handler)),
                 _HANDLER_TIMEOUT_S,
                 envelope.msg_type,

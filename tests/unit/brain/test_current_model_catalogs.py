@@ -137,7 +137,7 @@ def test_current_realtime_models_and_voices() -> None:
         "gpt-realtime-2.1",
         "gpt-realtime-2.1-mini",
     } == _ids(REALTIME_MODELS["openai-realtime"])
-    assert _ids(REALTIME_VOICES["openai-realtime"]) == {
+    assert _ids(REALTIME_VOICES["openai-live"]) == {
         "alloy",
         "ash",
         "ballad",

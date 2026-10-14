@@ -1,5 +1,6 @@
 """Deterministic tests for browser contracts and policy boundaries."""
 
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -33,6 +34,123 @@ def test_native_window_probe_degrades_without_native_dependencies(monkeypatch, p
     monkeypatch.setattr(native_window.sys, "platform", platform)
     monkeypatch.setattr(importlib.util, "find_spec", lambda _: None)
     assert native_window.available() is False
+
+
+@pytest.mark.parametrize("permission", [False, True])
+def test_macos_native_window_probe_is_permission_gated(monkeypatch, permission):
+    import importlib.util
+
+    from jarvis.society.browser import native_window
+
+    quartz = SimpleNamespace(CGPreflightScreenCaptureAccess=lambda: permission)
+    capture = SimpleNamespace(SCScreenshotManager=object())
+    monkeypatch.setattr(native_window.sys, "platform", "darwin")
+    monkeypatch.setattr(importlib.util, "find_spec", lambda _: object())
+    monkeypatch.setitem(sys.modules, "Quartz", quartz)
+    monkeypatch.setitem(sys.modules, "ScreenCaptureKit", capture)
+    assert native_window.available() is permission
+
+
+def test_macos_native_frame_projects_page_below_chrome_toolbar():
+    from jarvis.society.browser.native_window import _project_macos_viewport
+
+    assert _project_macos_viewport(0, 0, 1280, 900) == (0, 100, 1280, 900)
+    assert _project_macos_viewport(640, 400, 2560, 1800) == (1280, 1000, 2560, 1800)
+
+
+def test_capture_only_native_window_falls_back_to_page_stream_for_takeover():
+    from jarvis.society.browser.live_runner import Worker
+
+    worker = Worker()
+    worker.native = SimpleNamespace(input_enabled=False)
+    assert worker.native_stream_enabled() is True
+    worker.manual = True
+    assert worker.native_stream_enabled() is False
+    worker.native.input_enabled = True
+    assert worker.native_stream_enabled() is True
+
+
+async def test_macos_native_start_failure_closes_capture_and_uses_page_stream(monkeypatch):
+    from jarvis.society.browser import live_runner
+
+    closed = []
+    native = SimpleNamespace(
+        ready=SimpleNamespace(wait=lambda _: True),
+        frame=lambda: (_ for _ in ()).throw(RuntimeError("capture unavailable")),
+        park=lambda: None,
+        close=lambda: closed.append(True),
+    )
+    worker = live_runner.Worker()
+    monkeypatch.setattr(live_runner.sys, "platform", "darwin")
+
+    assert await worker.start_native_window(lambda _: native, 123) is False
+    assert worker.native is None
+    assert closed == [True]
+
+
+async def test_non_macos_native_start_failure_remains_strict(monkeypatch):
+    from jarvis.society.browser import live_runner
+
+    closed = []
+    native = SimpleNamespace(
+        ready=SimpleNamespace(wait=lambda _: False),
+        close=lambda: closed.append(True),
+    )
+    worker = live_runner.Worker()
+    monkeypatch.setattr(live_runner.sys, "platform", "win32")
+
+    with pytest.raises(RuntimeError, match="did not produce a window image"):
+        await worker.start_native_window(lambda _: native, 123)
+    assert worker.native is None
+    assert closed == [True]
+
+
+async def test_macos_native_discovery_failure_detaches_and_uses_page_stream(monkeypatch):
+    from jarvis.society.browser import live_runner
+
+    detached = []
+
+    class Connection:
+        async def send(self, _):
+            return {"processInfo": [{"id": 456, "type": "gpu-process"}]}
+
+        async def detach(self):
+            detached.append(True)
+
+    async def connect():
+        return Connection()
+
+    worker = live_runner.Worker()
+    monkeypatch.setattr(live_runner.sys, "platform", "darwin")
+
+    assert (
+        await worker.start_native_capture(
+            SimpleNamespace(new_browser_cdp_session=connect), lambda _: None
+        )
+        is False
+    )
+    assert worker.native is None
+    assert detached == [True]
+
+
+async def test_macos_failed_native_stream_closes_and_allows_page_recovery(monkeypatch):
+    from jarvis.society.browser import live_runner
+
+    closed = []
+    worker = live_runner.Worker()
+    worker.native = SimpleNamespace(failed=True, close=lambda: closed.append(True))
+    worker.native_replay = True
+    worker.native_frame_at = 123.0
+    worker.latest = {"data": "stale"}
+    monkeypatch.setattr(live_runner.sys, "platform", "darwin")
+
+    assert await worker.degrade_failed_native_capture() is True
+    assert worker.native is None
+    assert worker.native_replay is False
+    assert worker.native_frame_at == 0.0
+    assert worker.latest is None
+    assert worker.closed is False
+    assert closed == [True]
 
 
 def test_add_menu_names_the_browser_as_chrome():

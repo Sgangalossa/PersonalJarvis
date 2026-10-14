@@ -1,6 +1,7 @@
 """Unit tests for TaskStore — CRUD + startup cleanup + append_step."""
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -176,3 +177,22 @@ async def test_get_spec_deserialises(store: TaskStore) -> None:
     assert recovered.title == "Hallo"
     assert isinstance(recovered.trigger, TriggerAfterDelay)
     assert recovered.trigger.delay_seconds == 2.0
+
+
+async def test_append_step_concurrent_writers_get_unique_ordered_sequences(store: TaskStore) -> None:
+    """Concurrent step writers must not collide on PRIMARY KEY(task_id, seq)."""
+    spec = TaskSpec(
+        title="concurrent",
+        trigger=TriggerAfterDelay(delay_seconds=1.0),
+        action=SpeakAction(text="x"),
+    )
+    tid = await store.insert(spec)
+
+    seqs = await asyncio.gather(
+        *(store.append_step(tid, "log", {"i": i}) for i in range(20))
+    )
+
+    assert sorted(seqs) == list(range(1, 21))
+    task = await store.get(tid)
+    assert task is not None
+    assert [step["seq"] for step in task["steps"]] == list(range(1, 21))

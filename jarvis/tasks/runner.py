@@ -187,12 +187,17 @@ class TaskRunner:
         # Early cancel probe (before the state change)
         if cancel_token is not None and cancel_token.is_cancelled():
             await self._store.update_state(
-                task_id, "cancelled", error=cancel_token.reason or "cancelled"
+                task_id,
+                "cancelled",
+                error=cancel_token.reason or "cancelled",
+                expected_state="scheduled",
             )
             return
 
         ctx = _event_context(trigger_event)
-        await self._store.update_state(task_id, "running", increment_attempts=True)
+        if not await self._store.claim_running(task_id):
+            log.info("TaskRunner: task_id %s is already running or no longer scheduled", task_id)
+            return
         await self._store.append_step(task_id, "log", {"event": "run_started"})
         await self._bus.publish(TaskStarted(task_id=task_id, source_layer="tasks.runner"))
 
@@ -200,14 +205,18 @@ class TaskRunner:
         try:
             await self._execute_action(task_id, spec, cancel_token, ctx)
         except _Cancelled as exc:
-            await self._store.update_state(task_id, "cancelled", error=str(exc))
+            if not await self._store.update_state(task_id, "cancelled", error=str(exc), expected_state="running"):
+                return
             await self._store.append_step(
                 task_id, "log", {"event": "run_cancelled", "message": str(exc)}
             )
             return
         except Exception as exc:  # noqa: BLE001
             if isinstance(exc, RoutineDeferred) and ctx.get("hook_delivery_id"):
-                await self._store.update_state(task_id, "scheduled")
+                if not await self._store.update_state(
+                    task_id, "scheduled", expected_state="running"
+                ):
+                    return
                 await self._store.append_step(
                     task_id, "log", {"event": "deferred", "reason": "agent_busy"}
                 )
@@ -220,11 +229,13 @@ class TaskRunner:
             # (live 2026-08-24: the first automation ever added died for
             # good on one provider error and "Run now" refused it as final).
             is_recurring = await self._keeps_schedule(task_id, spec)
-            await self._store.update_state(
+            if not await self._store.update_state(
                 task_id,
                 "scheduled" if is_recurring else "failed",
                 error=error_msg,
-            )
+                expected_state="running",
+            ):
+                return
             await self._store.append_step(task_id, "log", {"event": "error", "message": error_msg})
             await self._bus.publish(
                 TaskFailed(
@@ -262,11 +273,13 @@ class TaskRunner:
         # One-shot triggers terminate as `completed`.
         is_recurring = await self._keeps_schedule(task_id, spec)
         final_state: TaskState = "scheduled" if is_recurring else "completed"
-        await self._store.update_state(
+        if not await self._store.update_state(
             task_id,
             final_state,
             result={"duration_ms": duration_ms},
-        )
+            expected_state="running",
+        ):
+            return
         await self._store.append_step(
             task_id, "log", {"event": "run_completed", "duration_ms": duration_ms}
         )
@@ -682,13 +695,21 @@ class TaskRunner:
             else:
                 assert self._brain is not None
                 try:
-                    result = await self._brain.run_task(
-                        prompt=prompt,
-                        allowed_tools=allowed_tools,
-                        model_tier=action.model_tier,
-                        trace_id=trace_id,
-                        prefer_api=owned_failed is not None,
-                    )
+                    if owned_failed is not None:
+                        result = await self._brain.run_task(
+                            prompt=prompt,
+                            allowed_tools=allowed_tools,
+                            model_tier=action.model_tier,
+                            trace_id=trace_id,
+                            prefer_api=True,
+                        )
+                    else:
+                        result = await self._brain.run_task(
+                            prompt=prompt,
+                            allowed_tools=allowed_tools,
+                            model_tier=action.model_tier,
+                            trace_id=trace_id,
+                        )
                 except Exception as exc:
                     if owned_failed is not None:
                         raise RuntimeError(

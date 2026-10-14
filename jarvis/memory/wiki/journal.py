@@ -828,10 +828,9 @@ def _normalise_candidates(
             )
         )
     if rejected_secret:
-        log.warning(
-            "CandidateJournal: blocked %d candidate(s) containing secret-shaped data",
-            rejected_secret,
-        )
+        # Keep the audit breadcrumb constant: even aggregate values derived
+        # from secret-bearing candidates must not enter diagnostics.
+        log.warning("CandidateJournal: blocked secret-shaped candidate data")
     return tuple(accepted)
 
 

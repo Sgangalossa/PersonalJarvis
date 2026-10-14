@@ -59,6 +59,35 @@ PROBE_CONCURRENCY = 6
 
 
 class CliStatusProber:
+    @staticmethod
+    async def _stop_process(proc: asyncio.subprocess.Process, label: str) -> None:
+        """Kill and drain a probe child before its owning task can exit.
+
+        Cancelling communicate() alone leaves the asyncio pipe transport
+        alive. On Windows that transport can keep event-loop teardown blocked.
+        """
+        if proc.returncode is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                log.debug("%s: probe child exited before kill", label)
+        try:
+            await asyncio.wait_for(proc.communicate(), timeout=KILL_WAIT_TIMEOUT_S)
+        except TimeoutError:
+            log.warning(
+                "%s: child survived kill() — leaking the zombie instead of "
+                "blocking shutdown.",
+                label,
+            )
+        except (ProcessLookupError, RuntimeError) as exc:
+            # The process or its pipes may have completed between cancellation
+            # and this drain. Either state is already terminal.
+            log.debug(
+                "%s: probe child drain already terminal (%s)",
+                label,
+                type(exc).__name__,
+            )
+
     async def probe(self, spec: CliSpec) -> CliStatus:
         installed, version, binary_path = await self._probe_binary(spec)
         if not installed:
@@ -165,15 +194,11 @@ class CliStatusProber:
             )
             try:
                 out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=CHECK_TIMEOUT_S)
-            except TimeoutError:
-                proc.kill()
-                try:
-                    await asyncio.wait_for(proc.wait(), timeout=KILL_WAIT_TIMEOUT_S)
-                except TimeoutError:
-                    log.warning(
-                        "probe-binary(%s): child survived kill() — leaking the "
-                        "zombie instead of hanging the probe.", spec.name,
-                    )
+            except asyncio.CancelledError:
+                await self._stop_process(proc, f"probe-binary({spec.name})")
+                raise
+            except TimeoutError:  # _stop_process reports any failed child teardown.
+                await self._stop_process(proc, f"probe-binary({spec.name})")
                 return True, None, path
         except FileNotFoundError:
             return False, None, None
@@ -215,15 +240,11 @@ class CliStatusProber:
             )
             try:
                 out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=AUTH_TIMEOUT_S)
-            except TimeoutError:
-                proc.kill()
-                try:
-                    await asyncio.wait_for(proc.wait(), timeout=KILL_WAIT_TIMEOUT_S)
-                except TimeoutError:
-                    log.warning(
-                        "probe-auth(%s): child survived kill() — leaking the "
-                        "zombie instead of hanging the probe.", spec.name,
-                    )
+            except asyncio.CancelledError:
+                await self._stop_process(proc, f"probe-auth({spec.name})")
+                raise
+            except TimeoutError:  # _stop_process reports any failed child teardown.
+                await self._stop_process(proc, f"probe-auth({spec.name})")
                 return "unknown"
             exit_code = proc.returncode or 0
         except FileNotFoundError:

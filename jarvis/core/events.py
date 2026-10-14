@@ -947,7 +947,8 @@ class TerminalClosed(Event):
 class TerminalCommandExecuted(Event):
     """Audit event — emitted on Enter key press (\\r).
 
-    Heuristic: a line buffer is maintained per session, flushed on \\r or \\n.
+    Heuristic: a line buffer is maintained per session, flushed on \\r or \
+.
     For TUI apps (vim, htop) this may occasionally contain garbage — sufficient
     for pure audit tracking nonetheless.
     """
@@ -1130,6 +1131,24 @@ class VoiceMuteChanged(Event):
     """
     muted: bool = False
     source: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class VoiceInputHeld(Event):
+    """A live call's microphone is held back while something else listens.
+
+    Published by the speech pipeline when a dictation starts beside a live
+    voice call (``held=True``) and again once that dictation has delivered its
+    text (``held=False``). The call keeps running; only the user's audio stops
+    reaching the realtime model, so the dictated words go into the text field
+    and never become a turn. Separate from ``VoiceMuteChanged`` on purpose:
+    that is the user's own mute, and a dictation must neither show it on
+    every mute icon nor clear it when it ends.
+
+    ``reason`` is free-form for the log (``"dictation"`` today).
+    """
+    held: bool = False
+    reason: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1708,6 +1727,7 @@ class LatencyPhase(StrEnum):
     INTENT_DECISION = "intent_decision"
     ACK_FIRST_TOKEN = "ack_first_token"  # noqa: S105 — phase name, not a secret
     ACK_FIRST_AUDIO = "ack_first_audio"
+    ACK_PLAYBACK_CONFIRMED = "ack_playback_confirmed"
     BRAIN_FIRST_TOKEN = "brain_first_token"  # noqa: S105 — phase name, not a secret
     BRAIN_FIRST_AUDIO = "brain_first_audio"
     TURN_TO_FIRST_AUDIO = "turn_to_first_audio"
@@ -1781,6 +1801,8 @@ class LatencyTurnComplete(Event):
     brain_output_tokens: int = -1
     tts_input_chars: int = -1
     errors: tuple[str, ...] = field(default_factory=tuple)
+    #: First confirmed-wake to first brain-routing decision, including user speech and STT.
+    wake_to_intent_e2e_ms: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -2298,6 +2320,25 @@ class SocietyRoomChanged(Event):
     max_rounds: int = 0
     max_messages: int = 0
     society_trace: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class SocietyAttentionChanged(Event):
+    """A user-facing Society item became worth attention.
+
+    This is deliberately not an AnnouncementRequested: the WebSocket uses
+    it for app-wide toasts and the Agents badge, while TTS remains owned by
+    the explicit voice reply path. Chat notices stay durable in agent-chat;
+    this event is the live cross-window receipt.
+    """
+
+    kind: str = ""  # "result" | "room" | "approval"
+    status: str = ""
+    count: int = 1
+    agent_ids: tuple[str, ...] = ()
+    text: str = ""
+    society_trace: str = ""
+    request_id: str = ""
 
 
 # ----------------------------------------------------------------------

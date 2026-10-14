@@ -144,8 +144,12 @@ def _keyless_credential_present(provider_id: str) -> bool:
         return False
     try:
         return bool(getattr(cfg_mod, probe_name)())
-    except Exception as exc:  # noqa: BLE001 — a probe must never break a card
-        log.debug("Keyless credential probe %s for %s failed: %s", probe_name, provider_id, exc)
+    except Exception:  # noqa: BLE001 — a probe must never break a card
+        # Credential probes may raise provider exceptions whose message embeds
+        # tokens, account identifiers, or credential file paths.  This log is
+        # only a diagnostic breadcrumb: never attach probe inputs or exception
+        # text to it.
+        log.debug("Keyless credential probe failed")
         return False
 
 

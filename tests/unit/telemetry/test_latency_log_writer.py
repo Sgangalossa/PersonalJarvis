@@ -44,9 +44,12 @@ async def test_row_schema_matches_cli_contract(tmp_path: Path) -> None:
         source_layer="speech.pipeline",
         anchor_ns=1_000_000_000,
         stages_ms={
+            "intent_decision": 181.0,
             "stt_first_partial": 150.0,
             "stt_finalize": 150.5,
             "brain_request_sent": 180.0,
+            "ack_first_token": 250.0,
+            "ack_playback_confirmed": 400.0,
             "brain_first_token": 1180.0,
             "brain_last_token": 1500.0,
             "tts_request_sent": 1510.0,
@@ -59,6 +62,7 @@ async def test_row_schema_matches_cli_contract(tmp_path: Path) -> None:
         brain_output_tokens=42,
         tts_input_chars=180,
         errors=("dummy",),
+        wake_to_intent_e2e_ms=812.0,
     )
     await writer._on_event(event)  # exercise the real path
     _flush_writer(writer, expected=1)
@@ -70,11 +74,13 @@ async def test_row_schema_matches_cli_contract(tmp_path: Path) -> None:
     assert row["turn_id"] == trace.hex
     assert row["anchor_ns"] == 1_000_000_000
     assert row["ttfw_ms"] == 1950.0
+    assert row["durations_ms"]["wake_to_intent_e2e"] == pytest.approx(812.0)
     assert row["total_ms"] == 2100.0
     # Per-stage durations are derived from adjacent offsets.
     assert row["durations_ms"]["brain_ttft"] == pytest.approx(1000.0, rel=1e-3)
     assert row["durations_ms"]["tts_ttfb"] == pytest.approx(390.0, rel=1e-3)
     assert row["durations_ms"]["stt_streaming"] == pytest.approx(0.5, rel=1e-3)
+    assert row["durations_ms"]["ack_playback"] == pytest.approx(150.0, rel=1e-3)
     assert row["stt_input_audio_ms"] == 820.0
     assert row["brain_input_tokens"] == 128
     assert row["errors"] == ["dummy"]

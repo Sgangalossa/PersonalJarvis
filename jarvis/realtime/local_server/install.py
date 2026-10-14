@@ -845,9 +845,12 @@ def _run_install_guarded(
             if not stopped and stop_message != "no owned server process found":
                 _fail(f"could not stop the existing managed server: {stop_message}")
                 return
-        except Exception as exc:  # noqa: BLE001 - never install under a live server
+        except Exception:  # noqa: BLE001 - never install under a live server
             log.warning("install: pre-install server stop failed", exc_info=True)
-            _fail(f"could not stop the existing managed server safely: {exc}")
+            _fail(
+                "could not stop the existing managed server safely; "
+                "see the application log for details"
+            )
             return
 
         # From this point onward a failure means the previous installation is
@@ -920,8 +923,9 @@ def _run_install_guarded(
             _STATE.detail = "installed, patched, smoke-booted, configured"
             _STATE.finished_at = time.time()
         log.info("local-realtime: managed install completed")
-    except Exception as exc:  # noqa: BLE001 — every failure must land in the state
-        _fail(str(exc))
+    except Exception:  # noqa: BLE001 — every failure must land in the state
+        log.exception("local-realtime: managed install failed")
+        _fail("installation failed; details are available in the application log")
 
 
 def _rmtree_tolerant(root: Path) -> None:

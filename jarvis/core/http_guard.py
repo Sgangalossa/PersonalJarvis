@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import socket
+from collections.abc import Mapping
 from typing import Any
 
 import httpx
@@ -37,9 +38,11 @@ import httpx
 __all__ = [
     "BlockedDestination",
     "InsecureRedirect",
+    "fetch_public_text_async",
     "https_only",
     "https_only_async",
     "public_only_async",
+    "request_public_async",
 ]
 
 
@@ -128,6 +131,125 @@ async def _check_public_request(request: httpx.Request, schemes: frozenset[str])
     # private address could otherwise be connected to on the private one.
     if not addresses or not all(_is_public_ip(str(a)) for a in addresses):
         raise BlockedDestination(f"refusing {host}: it resolves to a non-public address")
+
+
+async def _public_addresses(url: httpx.URL, schemes: frozenset[str]) -> tuple[str, ...]:
+    """Resolve ``url`` once and return only globally routable addresses."""
+    if url.scheme not in schemes:
+        raise BlockedDestination(f"refusing a {url.scheme!r} URL")
+    if url.username or url.password:
+        raise BlockedDestination("refusing URL credentials")
+    host = url.host
+    if not host:
+        raise BlockedDestination("refusing a URL without a host")
+    try:
+        if not _is_public_ip(host):
+            raise BlockedDestination(f"refusing non-public address {host}")
+        return (host,)
+    except ValueError:  # Hostname rather than literal: DNS validation below decides.
+        pass
+    port = url.port or (443 if url.scheme == "https" else 80)
+    try:
+        infos = await asyncio.wait_for(
+            asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM),
+            timeout=5.0,
+        )
+    except (OSError, TimeoutError) as exc:
+        raise BlockedDestination(f"cannot resolve {host}") from exc
+    addresses = {str(info[4][0]).split("%", 1)[0] for info in infos}
+    if not addresses or not all(_is_public_ip(address) for address in addresses):
+        raise BlockedDestination(f"refusing {host}: it resolves to a non-public address")
+    return tuple(sorted(addresses, key=lambda value: int(ipaddress.ip_address(value))))
+
+
+async def fetch_public_text_async(
+    url: str,
+    *,
+    schemes: tuple[str, ...] = ("https",),
+    request_timeout: float = 20.0,
+    max_bytes: int = 1024 * 1024,
+    max_redirects: int = 5,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> str:
+    """Fetch text while pinning every connection to a validated public IP.
+
+    Resolving in a request hook still leaves a DNS-rebinding window because
+    the transport performs a second lookup.  This downloader resolves once,
+    validates every answer, and connects to one of those exact IPs.  The
+    original host remains in ``Host`` and TLS SNI for certificate validation
+    and virtual hosting.  Redirects repeat the validation and pinning.
+    """
+    response = await request_public_async(
+        url,
+        schemes=schemes,
+        request_timeout=request_timeout,
+        follow_redirects=True,
+        max_redirects=max_redirects,
+        transport=transport,
+    )
+    response.raise_for_status()
+    if len(response.content) > max_bytes:
+        raise BlockedDestination(f"response exceeds {max_bytes} bytes")
+    return response.text
+
+
+async def request_public_async(
+    url: str,
+    *,
+    schemes: tuple[str, ...] = ("https",),
+    headers: Mapping[str, str] | None = None,
+    request_timeout: float = 20.0,
+    follow_redirects: bool = False,
+    max_redirects: int = 5,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> httpx.Response:
+    """GET through a public IP resolved and validated exactly once per hop.
+
+    The request URL may contain user-provided path data, but its connection is
+    pinned to a globally routable address. Environment proxies cannot replace
+    that target. Redirects are opt-in and, when enabled, each hop is rechecked.
+    """
+    allowed = frozenset(item.lower() for item in schemes)
+    try:
+        target = httpx.URL(url)
+    except httpx.InvalidURL as exc:
+        raise BlockedDestination("refusing an invalid URL") from exc
+    # Environment proxies would replace the exact validated connection target,
+    # defeating DNS pinning. Public validation therefore connects directly.
+    async with httpx.AsyncClient(
+        timeout=request_timeout,
+        transport=transport,
+        trust_env=False,
+    ) as client:
+        for redirect_count in range(max_redirects + 1):
+            addresses = await _public_addresses(target, allowed)
+            host = target.host
+            assert host is not None  # guaranteed by _public_addresses
+            pinned = target.copy_with(host=addresses[0])
+            default_port = 443 if target.scheme == "https" else 80
+            authority_host = f"[{host}]" if ":" in host else host
+            authority = (
+                authority_host
+                if target.port in (None, default_port)
+                else f"{authority_host}:{target.port}"
+            )
+            request_headers = dict(headers or {})
+            request_headers["host"] = authority
+            request = client.build_request("GET", pinned, headers=request_headers)
+            request.extensions["sni_hostname"] = host
+            response = await client.send(request, follow_redirects=False)
+            if response.has_redirect_location:
+                if not follow_redirects:
+                    return response
+                if redirect_count == max_redirects:
+                    raise BlockedDestination("too many redirects")
+                location = response.headers.get("location")
+                if not location:
+                    raise BlockedDestination("redirect without a location")
+                target = target.join(location)
+                continue
+            return response
+    raise BlockedDestination("request did not produce a response")
 
 
 def public_only_async(*, schemes: tuple[str, ...] = ("https",)) -> dict[str, Any]:

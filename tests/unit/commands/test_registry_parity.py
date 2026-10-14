@@ -144,12 +144,26 @@ def test_realtime_switch_exposes_experimental_acknowledgement() -> None:
     properties = command.params["properties"]
     # Removed 2026-08-10 with its adapter — the enum must not offer it.
     assert "codex-subscription-realtime" not in properties["provider"]["enum"]
-    assert "openai-realtime" in properties["provider"]["enum"]
+    assert "openai-live" in properties["provider"]["enum"]
+    assert "openai-realtime" not in properties["provider"]["enum"]
     assert properties["accept_experimental"] == {
         "type": "boolean",
         "default": False,
         "description": "Explicitly acknowledge an experimental provider transport.",
     }
+
+
+def test_agent_routine_command_exposes_event_triggers() -> None:
+    """The lead-chat tool must expose trigger kinds supported by its endpoint."""
+    command = get_command("society-create-routine")
+    assert command is not None
+    schedule = command.params["properties"]["schedule"]
+    kinds = schedule["properties"]["kind"]["enum"]
+    assert {"on_event", "webhook", "event_hook"}.issubset(kinds)
+    assert schedule["properties"]["provider"]["enum"] == [
+        "generic", "github", "linear", "gmail", "slack", "stripe",
+    ]
+    assert "conditions" in schedule["properties"]
 
 
 def test_spawn_agent_enum_follows_the_agent_registry() -> None:

@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+
 from jarvis.society.browser import install
 
 
@@ -141,3 +142,43 @@ def test_lock_identity_survives_platform_line_endings(installer, monkeypatch, tm
     assert install.is_installed(data)
     copy.write_bytes(original + b"# changed dependency manifest\n")
     assert not install.is_installed(data)
+
+
+def test_native_capture_probe_requires_a_physical_mac(monkeypatch):
+    monkeypatch.setattr(install.sys, "platform", "linux")
+    with pytest.raises(RuntimeError, match="physical Mac"):
+        install.native_capture_probe()
+
+
+def test_native_capture_probe_uses_the_managed_runtime(monkeypatch, tmp_path):
+    seen = []
+    result = {
+        "kind": "native_probe",
+        "ok": True,
+        "width": 2560,
+        "height": 1800,
+        "native_capture_ready": True,
+        "native_qualification_complete": False,
+    }
+    monkeypatch.setattr(install.sys, "platform", "darwin")
+    monkeypatch.setattr(install, "is_installed", lambda _: True)
+    monkeypatch.setattr(install, "venv_python", lambda _: tmp_path / "python")
+    monkeypatch.setattr(install, "browser_executable", lambda _: tmp_path / "chrome")
+    monkeypatch.setattr(install, "runner_path", lambda: tmp_path / "live_runner.py")
+    monkeypatch.setattr(install, "worker_env", lambda _: {"SAFE": "1"})
+
+    def run(cmd, **kwargs):
+        seen.append((cmd, kwargs))
+        return json.dumps(result)
+
+    monkeypatch.setattr(install, "_run", run)
+
+    assert install.native_capture_probe(tmp_path) == result
+    command, options = seen[0]
+    assert command[:4] == [
+        str(tmp_path / "python"),
+        str(tmp_path / "live_runner.py"),
+        "--native-probe",
+        str(tmp_path / "chrome"),
+    ]
+    assert options == {"env": {"SAFE": "1"}, "timeout": 60}

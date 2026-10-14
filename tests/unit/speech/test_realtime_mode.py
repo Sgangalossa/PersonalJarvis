@@ -1953,6 +1953,102 @@ async def test_capture_latency_extends_the_audible_phase(
 
 
 @pytest.mark.asyncio
+async def test_playback_barge_in_forwards_detector_preroll_without_double_upload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Confirmed local VAD owns the opening audio after an output barge-in.
+
+    The detector returns pre-roll plus confirmed speech because the capture
+    frames that triggered VAD are already in its rolling buffer. Uploading the
+    raw frame as well would double the user's opening syllables. The pipeline
+    therefore sends exactly the detector payload after the barge control.
+    """
+    pipe = _pipe()
+    ready = asyncio.Event()
+    confirmed = b"\x0d\x00" * 64
+    raw_frame = b"\x0e\x00" * 256
+    output_pcm = b"\x0f\x00" * 32
+
+    class _Detector:
+        def __init__(self, **kwargs: object) -> None:
+            self._probe = kwargs.get("output_active")
+            self.active = False
+
+        def warmup(self) -> None:
+            return None
+
+        def start_output(self) -> None:
+            self.active = True
+
+        def stop_output(self) -> None:
+            self.active = False
+
+        def feed(self, pcm: bytes) -> bytes | None:
+            if self._probe is None:
+                return None
+            return confirmed if pcm == raw_frame else None
+
+    class _Mic:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc: object) -> bool:
+            return False
+
+        async def stream(self):
+            await ready.wait()
+            yield AudioChunk(pcm=raw_frame, sample_rate=16_000, timestamp_ns=0)
+            await asyncio.Event().wait()
+
+    class _Session(_HandshakeOnlyRealtimeSession):
+        def __init__(self, send_binary, send_json) -> None:
+            super().__init__(send_binary, send_json)
+            self.audio_frames: list[bytes] = []
+            self.barged = asyncio.Event()
+
+        async def handle_control(self, message) -> None:
+            self.controls.append(message)
+            if message.get("type") == "audio_start":
+                await self._send_json(
+                    {
+                        "type": "audio_ready",
+                        "provider": "fake-live",
+                        "input_sample_rate": 16_000,
+                        "output_sample_rate": 24_000,
+                    }
+                )
+                await self._send_binary(output_pcm)
+                ready.set()
+            elif message.get("type") == "barge_in":
+                self.barged.set()
+
+        async def handle_audio_frame(self, pcm: bytes) -> None:
+            self.audio_frames.append(pcm)
+
+        async def wait_finished(self) -> None:
+            await self.barged.wait()
+
+    built: dict[str, object] = {}
+
+    def _build(**kwargs):
+        session = _Session(kwargs["send_binary"], kwargs["send_json"])
+        built["session"] = session
+        return session
+
+    monkeypatch.setattr("jarvis.realtime.factory.build_realtime_session", _build)
+    monkeypatch.setattr(
+        "jarvis.realtime.desktop.DesktopRealtimeBargeInDetector", _Detector
+    )
+    monkeypatch.setattr(pipeline_mod, "MicrophoneCapture", lambda **_kwargs: _Mic())
+
+    await asyncio.wait_for(pipe._active_realtime_session(), timeout=5.0)
+
+    session = built["session"]
+    assert {"type": "barge_in"} in session.controls
+    assert confirmed in session.audio_frames
+    assert raw_frame not in session.audio_frames
+
+@pytest.mark.asyncio
 async def test_thinking_phase_barge_in_takes_the_floor_without_a_stop_word(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

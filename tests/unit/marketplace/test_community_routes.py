@@ -17,7 +17,10 @@ import pytest
 from fastapi import FastAPI
 
 from jarvis.marketplace import catalog_data, community_source
-from jarvis.marketplace.agent_plugins_loader import EXTENSION_NAMESPACE
+from jarvis.marketplace.agent_plugins_loader import (
+    EXTENSION_NAMESPACE,
+    AgentPluginError,
+)
 from jarvis.marketplace.usage_cards import loader as cards_loader
 from jarvis.ui.web.marketplace_routes import router
 
@@ -229,6 +232,42 @@ async def test_refresh_bypasses_ttl(community_env: Path, monkeypatch: pytest.Mon
         resp = await client.post("/api/marketplace/community/refresh")
     assert resp.status_code == 200
     assert calls == [True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("get", "/api/marketplace/community"),
+        ("post", "/api/marketplace/community/refresh"),
+    ],
+)
+async def test_browse_hides_manifest_exception_details(
+    community_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    path: str,
+) -> None:
+    private_detail = "/srv/private/token-DO-NOT-EXPOSE"
+
+    def fail_conversion(*args: Any, **kwargs: Any) -> Any:
+        raise AgentPluginError(private_detail)
+
+    async def cached_index(*, force: bool = False) -> tuple[Any, str]:
+        return community_source.cached_index(), "fresh"
+
+    monkeypatch.setattr(
+        "jarvis.marketplace.agent_plugins_loader.convert_manifest",
+        fail_conversion,
+    )
+    monkeypatch.setattr(community_source, "get_index", cached_index)
+    async with _client() as client:
+        response = await client.request(method, path)
+
+    assert response.status_code == 200
+    plugin = response.json()["plugins"][0]
+    assert plugin["error"] == "Invalid community plugin manifest."
+    assert private_detail not in response.text
 
 
 # ----------------------------------------------------------------------

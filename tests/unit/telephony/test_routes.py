@@ -256,6 +256,26 @@ def test_outbound_route_hides_unexpected_exception_text(app, secret_store, monke
     assert r.json()["error"].startswith("outbound call failed")
 
 
+def test_test_route_hides_provision_exception_text(app, secret_store, monkeypatch):
+    from jarvis.telephony.provisioning import TelephonyProvisionError
+
+    def boom(*args):
+        raise TelephonyProvisionError(
+            "provider response exposed an internal path and token",
+            status="bad_key",
+        )
+
+    monkeypatch.setattr("jarvis.telephony.provisioning.verify_credentials", boom)
+    with TestClient(app) as client:
+        r = client.post("/api/telephony/test")
+
+    assert r.status_code == 200
+    assert r.json()["status"] == "bad_key"
+    assert r.json()["error"] == "Twilio credential check failed: credentials were rejected."
+    assert "internal path" not in r.json()["error"]
+    assert app.state.telephony_manager.reachable_error == r.json()["error"]
+
+
 def test_calls_endpoint_returns_ring_buffer(app, secret_store):
     from jarvis.telephony.status import CallRecord
 
@@ -401,18 +421,22 @@ def test_outbound_route_graceful_when_twilio_missing(app, secret_store, monkeypa
     assert "twilio" in body["error"].lower()
 
 
-def test_outbound_route_surfaces_provision_error(app, secret_store, monkeypatch):
+def test_outbound_route_hides_provision_exception_text(app, secret_store, monkeypatch):
     from jarvis.telephony.provisioning import TelephonyProvisionError
 
     def boom(**kwargs):
-        raise TelephonyProvisionError("Number purchase failed: nope")
+        raise TelephonyProvisionError(
+            "Number purchase failed: provider response and token",
+            status="rate_limited",
+        )
 
     monkeypatch.setattr("jarvis.telephony.outbound.place_call", boom)
     with TestClient(app) as client:
         r = client.post("/api/telephony/outbound", json={"to": "+4915112345678", "opening": "Hi"})
     assert r.status_code == 409
     assert r.json()["ok"] is False
-    assert "nope" in r.json()["error"]
+    assert r.json()["error"] == "Outbound call failed: the provider is rate-limiting requests."
+    assert "provider response" not in r.json()["error"]
 
 
 def test_voice_webhook_outbound_branch_returns_opening(app, secret_store, fake_cfg):

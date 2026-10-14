@@ -15,9 +15,10 @@ import {
   type DocNavSummary,
 } from "@/hooks/useDocs";
 import { useT } from "@/i18n";
+import { OFFICIAL_REPO_URL } from "@/lib/branding";
 import { openExternalUrl } from "@/lib/openExternal";
 
-const ONLINE_DOCS_URL = "https://github.com/PersonalJarvis/PersonalJarvis/tree/main/docs";
+const ONLINE_DOCS_URL = `${OFFICIAL_REPO_URL}/tree/main/docs`;
 interface Props {
   onSelect: (slug: string) => void;
 }

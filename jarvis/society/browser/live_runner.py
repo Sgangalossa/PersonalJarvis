@@ -69,6 +69,90 @@ async def probe() -> None:
             await browser.close()
 
 
+async def native_capture_probe(executable: str, profile: str) -> None:
+    """Exercise real macOS Chrome capture without posting any native input."""
+    if sys.platform != "darwin":
+        raise RuntimeError("Native Chrome capture qualification requires macOS")
+
+    from native_window import NativeWindow, available  # type: ignore[import-not-found]
+    from PIL import Image
+    from playwright.async_api import async_playwright  # type: ignore[import-not-found]
+
+    if not available():
+        raise RuntimeError("Screen Recording permission or ScreenCaptureKit is unavailable")
+    native: Any = None
+    cdp: Any = None
+    async with async_playwright() as pw:
+        context = await pw.chromium.launch_persistent_context(
+            profile,
+            executable_path=executable,
+            headless=False,
+            viewport={"width": 1280, "height": 800},
+        )
+        try:
+            page = context.pages[0]
+            await page.set_content("<title>Jarvis native capture probe</title><h1>Ready</h1>")
+            cdp = await context.browser.new_browser_cdp_session()
+            processes = await cdp.send("SystemInfo.getProcessInfo")
+            pid = next(
+                (
+                    process.get("id")
+                    for process in processes.get("processInfo", [])
+                    if process.get("type") == "browser"
+                ),
+                None,
+            )
+            if pid is None:
+                raise RuntimeError("Chrome browser process was not published over CDP")
+            native = NativeWindow(int(pid))
+            if not await asyncio.to_thread(native.ready.wait, 10):
+                raise RuntimeError("Chrome did not produce a native window image")
+            frame = native.frame()
+            if not frame:
+                raise RuntimeError("Chrome native window image is empty")
+            width, height = int(frame["width"]), int(frame["height"])
+            with Image.open(io.BytesIO(frame["bytes"])) as image:
+                image_size = image.size
+                image.verify()
+            if image_size != (width, height) or width < 1280 or height <= 800:
+                raise RuntimeError("Chrome native window geometry is inconsistent")
+            x, y, projected_width, projected_height = native.viewport_point(640, 400)
+            if (
+                (projected_width, projected_height) != (width, height)
+                or not 0 < x < width
+                or not 400 < y < height
+            ):
+                raise RuntimeError("Chrome Retina viewport projection is inconsistent")
+            emit(
+                "native_probe",
+                ok=True,
+                width=width,
+                height=height,
+                viewport_center=[x, y],
+                input_enabled=bool(native.input_enabled),
+                native_capture_ready=True,
+                native_qualification_complete=False,
+            )
+        finally:
+            if cdp is not None:
+                try:
+                    await cdp.detach()
+                except Exception as detach_exc:
+                    logging.getLogger(__name__).debug(
+                        "Native Chrome probe CDP cleanup failed (%s)",
+                        type(detach_exc).__name__,
+                    )
+            if native is not None:
+                try:
+                    await asyncio.to_thread(native.close)
+                except Exception as close_exc:
+                    logging.getLogger(__name__).debug(
+                        "Native Chrome probe capture cleanup failed (%s)",
+                        type(close_exc).__name__,
+                    )
+            await context.close()
+
+
 class Worker:
     def __init__(self) -> None:
         self.pending: dict[str, asyncio.Future] = {}
@@ -108,6 +192,109 @@ class Worker:
         self.visual_action = False
         self.cursor_on = False
         self.cursor_jobs: set[asyncio.Task] = set()
+
+    def native_stream_enabled(self) -> bool:
+        """Manual control uses page pixels when native input is unavailable."""
+        return bool(
+            self.native
+            and (not self.manual or bool(getattr(self.native, "input_enabled", False)))
+        )
+
+    async def start_native_window(
+        self, factory: Any, pid: int, icon_path: str = ""
+    ) -> bool:
+        """Start native capture, with a page-stream fallback on macOS."""
+        candidate: Any = None
+        try:
+            # Native extension loading belongs to this isolated worker's
+            # main thread; NumPy/OpenCV DLL loading can stall in a pool thread.
+            candidate = factory(int(pid))
+            if not await asyncio.to_thread(candidate.ready.wait, 10):
+                raise RuntimeError("Chrome did not produce a window image")
+            candidate.frame()
+            await asyncio.to_thread(candidate.park)
+        except Exception as exc:
+            if candidate is not None:
+                try:
+                    await asyncio.to_thread(candidate.close)
+                except Exception as close_exc:
+                    logging.getLogger(__name__).debug(
+                        "Native Chrome cleanup failed after startup error (%s)",
+                        type(close_exc).__name__,
+                    )
+            if sys.platform != "darwin":
+                raise
+            logging.getLogger(__name__).warning(
+                "Native macOS Chrome capture unavailable; using page stream (%s)",
+                type(exc).__name__,
+            )
+            return False
+        self.native = candidate
+        if icon_path:
+            self.branding = asyncio.create_task(
+                asyncio.to_thread(candidate.brand, icon_path)
+            )
+        return True
+
+    async def start_native_capture(
+        self, browser: Any, factory: Any, icon_path: str = ""
+    ) -> bool:
+        """Discover Chrome and start native capture without stranding macOS."""
+        connection: Any = None
+        try:
+            connection = await browser.new_browser_cdp_session()
+            processes = await connection.send("SystemInfo.getProcessInfo")
+            pid = next(
+                (
+                    process.get("id")
+                    for process in processes.get("processInfo", [])
+                    if process.get("type") == "browser"
+                ),
+                None,
+            )
+            if pid is None:
+                raise RuntimeError("Chrome browser process was not published over CDP")
+            return await self.start_native_window(factory, int(pid), icon_path)
+        except Exception as exc:
+            if sys.platform != "darwin":
+                raise
+            logging.getLogger(__name__).warning(
+                "Native macOS Chrome discovery unavailable; using page stream (%s)",
+                type(exc).__name__,
+            )
+            return False
+        finally:
+            if connection is not None:
+                try:
+                    await connection.detach()
+                except Exception as detach_exc:
+                    if sys.platform != "darwin":
+                        raise
+                    logging.getLogger(__name__).debug(
+                        "Native macOS Chrome discovery cleanup failed (%s)",
+                        type(detach_exc).__name__,
+                    )
+
+    async def degrade_failed_native_capture(self) -> bool:
+        """Release failed macOS capture so the existing page stream can resume."""
+        native = self.native
+        if sys.platform != "darwin" or native is None or not native.failed:
+            return False
+        self.native = None
+        self.native_replay = False
+        self.native_frame_at = 0.0
+        self.latest = None
+        try:
+            await asyncio.to_thread(native.close)
+        except Exception as close_exc:
+            logging.getLogger(__name__).debug(
+                "Failed macOS Chrome capture cleanup failed (%s)",
+                type(close_exc).__name__,
+            )
+        logging.getLogger(__name__).warning(
+            "Native macOS Chrome capture stopped; using page stream"
+        )
+        return True
 
     async def rpc(self, kind: str, payload: dict) -> dict:
         key = uuid.uuid4().hex
@@ -207,40 +394,27 @@ class Worker:
             self.page_opened(page)
         self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
         if self.owns_context and native_enabled:
-            connection = await self.context.browser.new_browser_cdp_session()
-            try:
-                processes = await connection.send("SystemInfo.getProcessInfo")
-                pid = next(p["id"] for p in processes["processInfo"] if p["type"] == "browser")
-                # Native extension loading belongs to this isolated worker's
-                # main thread; NumPy/OpenCV DLL loading can stall in a pool thread.
-                self.native = NativeWindow(int(pid))
-                if not await asyncio.to_thread(self.native.ready.wait, 10):
-                    raise RuntimeError("Chrome did not produce a window image")
-                self.native.frame()
-                await asyncio.to_thread(self.native.park)
-                if args.get("icon_path"):
-                    self.branding = asyncio.create_task(
-                        asyncio.to_thread(self.native.brand, str(args["icon_path"]))
-                    )
-            finally:
-                await connection.detach()
-            if self.page.url == "about:blank":
-                await self.page.goto("chrome://newtab/", wait_until="commit", timeout=5000)
-        elif self.owns_context and self.page.url == "about:blank":
-            await self.page.set_content(
-                "<html><head><title>Personal Jarvis — Agent Browser</title></head>"
-                "<body style='background:#fafafa;color:#303030;font:24px system-ui;"
-                "display:grid;place-items:center;height:90vh'><main>"
-                "<h1>Personal Jarvis</h1><p>Your agent browser is ready.</p>"
-                "<p>Ask your agent to open a website, or take control in Personal Jarvis.</p>"
-                "</main></body></html>"
+            await self.start_native_capture(
+                self.context.browser, NativeWindow, str(args.get("icon_path") or "")
             )
+        if self.owns_context and self.page.url == "about:blank":
+            if self.native:
+                await self.page.goto("chrome://newtab/", wait_until="commit", timeout=5000)
+            else:
+                await self.page.set_content(
+                    "<html><head><title>Personal Jarvis — Agent Browser</title></head>"
+                    "<body style='background:#fafafa;color:#303030;font:24px system-ui;"
+                    "display:grid;place-items:center;height:90vh'><main>"
+                    "<h1>Personal Jarvis</h1><p>Your agent browser is ready.</p>"
+                    "<p>Ask your agent to open a website, or take control in Personal Jarvis.</p>"
+                    "</main></body></html>"
+                )
         self.state_task = asyncio.create_task(self.watch_state())
         self.stream = asyncio.create_task(self.watch())
         return {
             "generation": self.generation,
             "protocol": PROTOCOL_VERSION,
-            "full_window": bool(self.native),
+            "full_window": self.native_stream_enabled(),
         }
 
     async def launch_context(self, profile: str, **options: Any) -> Any:
@@ -337,7 +511,7 @@ class Worker:
             finally:
                 await session.detach()
         focused = self.browser.get_focused_target() if self.browser is not None else None
-        if self.native and self.manual:
+        if self.native and self.manual and getattr(self.native, "input_enabled", False):
             window_title = self.native.title()
             candidates = []
             for page in self.tabs.values():
@@ -411,8 +585,12 @@ class Worker:
                 if self.viewers:
                     page = await self.focused()
                     target = next((t for t, p in self.tabs.items() if p is page), "")
-                    if self.native:
+                    if self.native_stream_enabled():
                         self.target = target
+                        if self.cdp:
+                            await self.cdp.send("Page.stopScreencast")
+                            await self.cdp.detach()
+                            self.cdp = None
                     elif page and (target != self.target or self.cdp is None):
                         await self.switch_stream(page, target)
                     emit(
@@ -423,7 +601,7 @@ class Worker:
                         url=page.url if page else "",
                         target=target,
                         tabs=[{"id": t, "url": p.url} for t, p in self.tabs.items()],
-                        full_window=bool(self.native),
+                        full_window=self.native_stream_enabled(),
                     )
                 elif self.cdp:
                     await self.cdp.send("Page.stopScreencast")
@@ -435,9 +613,10 @@ class Worker:
             except Exception as exc:
                 emit("warning", error=f"Browser stream: {type(exc).__name__}")
                 if self.native and self.native.failed:
-                    emit("fatal", error="The Chrome window closed or its capture stopped")
-                    self.closed = True
-                    return
+                    if not await self.degrade_failed_native_capture():
+                        emit("fatal", error="The Chrome window closed or its capture stopped")
+                        self.closed = True
+                        return
                 self.target = ""
                 await asyncio.sleep(1)
             await asyncio.sleep(0.5)
@@ -446,7 +625,7 @@ class Worker:
         while not self.closed:
             try:
                 if self.viewers:
-                    if self.native:
+                    if self.native_stream_enabled():
                         native_frame = self.native.frame()
                         if native_frame and (
                             self.native_replay or native_frame["timestamp"] != self.native_frame_at
@@ -476,7 +655,7 @@ class Worker:
                             "frame",
                             generation=self.generation,
                             sequence=self.sequence,
-                            full_window=bool(self.native),
+                            full_window=self.native_stream_enabled(),
                             **frame,
                         )
             except asyncio.CancelledError:
@@ -486,9 +665,11 @@ class Worker:
                 self.target = ""
                 await asyncio.sleep(1)
             if self.native and self.native.failed:
-                emit("fatal", error="The Chrome window closed or its capture stopped")
-                self.closed = True
-                return
+                if not await self.degrade_failed_native_capture():
+                    emit("fatal", error="The Chrome window closed or its capture stopped")
+                    self.closed = True
+                    return
+                self.target = ""
             await asyncio.sleep(1 / 15)
 
     async def run(self, args: dict) -> dict:
@@ -655,11 +836,16 @@ class Worker:
                 if generation != self.takeover_generation:
                     return {"manual": self.manual}
                 self.manual = True
+                self.latest = None
                 if self.pointer:
                     self.pointer.clear()
                 await self.show_page_cursor(False)
             else:
-                if self.native and self.manual:
+                if (
+                    self.native
+                    and self.manual
+                    and getattr(self.native, "input_enabled", False)
+                ):
                     await self.ensure_browser()
                     from browser_use.browser import events  # type: ignore[import-not-found]
 
@@ -670,6 +856,9 @@ class Worker:
                             events.SwitchTabEvent(target_id=target)
                         )
                 self.manual = False
+                self.latest = None
+                if self.native:
+                    self.native_replay = self.viewers
                 self.agent_gate.set()
                 if self.cursor_on:
                     await self.show_page_cursor(True)
@@ -683,7 +872,11 @@ class Worker:
             return {}
         if not self.manual:
             raise RuntimeError("Take control of the browser before interacting")
-        if self.native and op in {"click", "scroll", "text", "key"}:
+        if (
+            self.native
+            and getattr(self.native, "input_enabled", False)
+            and op in {"click", "scroll", "text", "key"}
+        ):
             if op == "key" and args.get("key") == "Control+t":
                 async with self.context.expect_page(timeout=5000) as opened:
                     await asyncio.to_thread(self.native.input, op, args)
@@ -750,7 +943,7 @@ class Worker:
     async def main(self) -> None:
         from native_window import available
 
-        if available():
+        if sys.platform == "win32" and available():
             # Native DLL initialization must finish before a Windows CRT stdin
             # reader holds its stream lock in another thread.
             __import__("windows_capture")
@@ -804,7 +997,11 @@ class Worker:
 
 if __name__ == "__main__":
     try:
-        asyncio.run(probe() if "--probe" in sys.argv else Worker().main())
+        if "--native-probe" in sys.argv:
+            index = sys.argv.index("--native-probe")
+            asyncio.run(native_capture_probe(sys.argv[index + 1], sys.argv[index + 2]))
+        else:
+            asyncio.run(probe() if "--probe" in sys.argv else Worker().main())
     except Exception as exc:
         emit("fatal", error=f"{type(exc).__name__}: {exc}")
         raise

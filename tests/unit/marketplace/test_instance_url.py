@@ -9,7 +9,12 @@ from __future__ import annotations
 
 import pytest
 
-from jarvis.marketplace.instance_url import InstanceUrlError, normalize_instance_url
+from jarvis.marketplace import instance_url as instance_urls
+from jarvis.marketplace.instance_url import (
+    InstanceUrlError,
+    normalize_instance_url,
+    validate_instance_destination,
+)
 
 
 @pytest.mark.parametrize(
@@ -48,7 +53,66 @@ def test_a_scheme_less_host_defaults_to_https() -> None:
     assert normalize_instance_url("ha.example.test") == "https://ha.example.test"
 
 
-@pytest.mark.parametrize("raw", ["", "   ", "ftp://ha.example.test", "https://"])
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "",
+        "   ",
+        "ftp://ha.example.test",
+        "https://",
+        "http://admin:secret@192.168.1.20:8123",
+        "http://192.168.1.20:99999",
+    ],
+)
 def test_rejects_what_cannot_be_an_address(raw: str) -> None:
     with pytest.raises(InstanceUrlError):
         normalize_instance_url(raw)
+
+
+@pytest.mark.asyncio
+async def test_destination_guard_keeps_private_self_hosted_services() -> None:
+    assert (
+        await validate_instance_destination("http://192.168.1.20:8123/lovelace")
+        == "http://192.168.1.20:8123"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "http://127.0.0.1:8123",
+        "http://[::1]:8123",
+        "http://169.254.169.254/latest/meta-data",
+        "http://100.100.100.200/latest/meta-data",
+        "http://168.63.129.16/machine",
+        "http://[fd00:ec2::254]/latest/meta-data",
+        "http://metadata.google.internal/computeMetadata/v1",
+        "http://jarvis.localhost:8123",
+    ],
+)
+async def test_destination_guard_rejects_system_and_metadata_targets(raw: str) -> None:
+    with pytest.raises(InstanceUrlError, match="blocked system"):
+        await validate_instance_destination(raw)
+
+
+@pytest.mark.asyncio
+async def test_destination_guard_requires_every_dns_answer_to_be_safe(monkeypatch) -> None:
+    async def mixed_answers(_host: str, _port: int) -> set[str]:
+        return {"192.168.1.20", "127.0.0.1"}
+
+    monkeypatch.setattr(instance_urls, "_resolve_addresses", mixed_answers)
+    with pytest.raises(InstanceUrlError, match="blocked system"):
+        await validate_instance_destination("https://homeassistant.example")
+
+
+@pytest.mark.asyncio
+async def test_destination_guard_accepts_a_dns_name_with_safe_answers(monkeypatch) -> None:
+    async def private_answers(_host: str, _port: int) -> set[str]:
+        return {"192.168.1.20", "fd12:3456::20"}
+
+    monkeypatch.setattr(instance_urls, "_resolve_addresses", private_answers)
+    assert (
+        await validate_instance_destination("homeassistant.example:8123/dashboard")
+        == "https://homeassistant.example:8123"
+    )

@@ -34,6 +34,7 @@ from .model import (
     SUBSCRIPTION_RUNNERS,
     SURFACE_AGENT_CHAT,
     SURFACE_AGENTIC_IDE,
+    SURFACE_SOCIETY,
     SURFACE_BACKGROUND,
     SURFACE_JARVIS_VOICE,
     SURFACE_MISSION,
@@ -337,10 +338,51 @@ def _agent_chat_entries(path: Path | None, since_ms: int, until_ms: int) -> Iter
         if not _has_table(conn, "agent_chat_events"):
             return
         sessions: dict[str, sqlite3.Row] = {}
+        session_has_surface = False
+        session_has_vendor_session = False
+        session_has_account_id = False
         if _has_table(conn, "agent_chat_sessions"):
-            for row in conn.execute(
-                "SELECT session_id, title, provider, model FROM agent_chat_sessions"
-            ):
+            try:
+                session_has_surface = any(
+                    str(row["name"]) == "surface"
+                    for row in conn.execute("PRAGMA table_info(agent_chat_sessions)")
+                )
+            except sqlite3.Error as exc:
+                log.debug(
+                    "cost read model: cannot inspect agent chat surface column (%s)",
+                    exc,
+                )
+                session_has_surface = False
+            columns = "session_id, title, provider, model"
+            try:
+                session_has_vendor_session = any(
+                    str(row["name"]) == "vendor_session"
+                    for row in conn.execute("PRAGMA table_info(agent_chat_sessions)")
+                )
+            except sqlite3.Error as exc:
+                log.debug(
+                    "cost read model: cannot inspect agent chat vendor-session column (%s)",
+                    exc,
+                )
+                session_has_vendor_session = False
+            if session_has_surface:
+                columns += ", surface"
+            if session_has_vendor_session:
+                columns += ", vendor_session"
+            try:
+                session_has_account_id = any(
+                    str(row["name"]) == "account_id"
+                    for row in conn.execute("PRAGMA table_info(agent_chat_sessions)")
+                )
+            except sqlite3.Error as exc:
+                log.debug(
+                    "cost read model: cannot inspect agent chat account-id column (%s)",
+                    exc,
+                )
+                session_has_account_id = False
+            if session_has_account_id:
+                columns += ", account_id"
+            for row in conn.execute(f"SELECT {columns} FROM agent_chat_sessions"):
                 sessions[str(row["session_id"])] = row
 
         # ``turn_started`` is where the runner is named, and it is the only
@@ -412,9 +454,30 @@ def _agent_chat_entries(path: Path | None, since_ms: int, until_ms: int) -> Iter
                 subscription=start.get("runner", "") in SUBSCRIPTION_RUNNERS,
                 tokens_cached=tokens_cached,
             )
+            chat_surface = (
+                str(session["surface"] or "")
+                if session is not None and session_has_surface
+                else ""
+            )
+            vendor_session = (
+                str(session["vendor_session"] or "")
+                if session is not None and session_has_vendor_session
+                else ""
+            )
+            runner = start.get("runner", "")
+            ref_id = (
+                vendor_session
+                if runner in SUBSCRIPTION_RUNNERS and vendor_session
+                else str(row["session_id"] or "")
+            )
+            account_id = (
+                str(session["account_id"] or "")
+                if session is not None and session_has_account_id
+                else ""
+            )
             yield CostEntry(
                 ts_ms=_int(row["ts_ms"]),
-                surface=SURFACE_AGENT_CHAT,
+                surface=SURFACE_SOCIETY if chat_surface == "society" else SURFACE_AGENT_CHAT,
                 role=ROLE_AGENT,
                 provider=provider,
                 model=model,
@@ -423,8 +486,10 @@ def _agent_chat_entries(path: Path | None, since_ms: int, until_ms: int) -> Iter
                 tokens_cached=tokens_cached,
                 cost_usd=cost,
                 price_source=source,
-                ref_id=str(row["session_id"] or ""),
+                ref_id=ref_id,
                 label=_clip(session["title"] if session is not None else ""),
+                runner=runner,
+                account_id=account_id,
             )
     except sqlite3.Error as exc:
         log.warning("cost read model: agent chat source failed (%s)", exc)
@@ -462,7 +527,7 @@ def _mission_entries(path: Path | None, since_ms: int, until_ms: int) -> Iterato
             str(r["id"]): _clip(r["prompt"])
             for r in conn.execute("SELECT id, prompt FROM missions")
         }
-        spawned: dict[str, tuple[str, str]] = {}
+        spawned: dict[str, tuple[str, str, str]] = {}
         for r in conn.execute(
             "SELECT worker_id, payload_json FROM mission_events WHERE event_type = 'WorkerSpawned'"
         ):
@@ -476,7 +541,8 @@ def _mission_entries(path: Path | None, since_ms: int, until_ms: int) -> Iterato
             step: dict[str, Any] = raw_step if isinstance(raw_step, dict) else {}
             cli = str(meta.get("cli") or step.get("worker_cli") or "")
             model = str(meta.get("model") or step.get("model") or "")
-            spawned[str(r["worker_id"] or "")] = (cli, model)
+            session_id = str(meta.get("session_id") or "")
+            spawned[str(r["worker_id"] or "")] = (cli, model, session_id)
         for row in conn.execute(
             "SELECT mission_id, worker_id, ts_ms, payload_json FROM mission_events "
             "WHERE event_type = 'WorkerDraftReady' AND ts_ms BETWEEN ? AND ?",
@@ -493,9 +559,12 @@ def _mission_entries(path: Path | None, since_ms: int, until_ms: int) -> Iterato
             recorded = _float(payload.get("cost_usd"))
             if tokens <= 0 and recorded <= 0:
                 continue
-            cli, spawned_model = spawned.get(str(row["worker_id"] or ""), ("", ""))
+            cli, spawned_model, spawned_session = spawned.get(
+                str(row["worker_id"] or ""), ("", "", "")
+            )
             provider = str(payload.get("provider") or (f"{cli}-cli" if cli else "mission-worker"))
             model = str(payload.get("model") or spawned_model)
+            session_id = str(payload.get("session_id") or spawned_session or "")
             # A turn count masquerading as tokens: no model call costs more
             # than a cent per token. Keep the money, drop the fake quantity.
             if recorded > 0 and tokens > 0 and recorded / tokens > 0.01:
@@ -522,8 +591,9 @@ def _mission_entries(path: Path | None, since_ms: int, until_ms: int) -> Iterato
                 tokens_cached=0,
                 cost_usd=cost,
                 price_source=source,
-                ref_id=mission_id,
+                ref_id=session_id or mission_id,
                 label=prompts.get(mission_id, ""),
+                runner=f"{cli}-cli" if cli else "",
             )
     except sqlite3.Error as exc:
         log.warning("cost read model: mission source failed (%s)", exc)
@@ -691,6 +761,8 @@ def _cli_entries(
             price_source=source,
             ref_id=turn.session_id,
             label=_clip(turn.label or turn.cwd),
+            runner=turn.agent,
+            account_id=turn.account_id,
         )
 
 
@@ -742,12 +814,71 @@ def collect_entries(
     """Every priced line item across all sources, newest last."""
     entries: list[CostEntry] = []
     entries.extend(_voice_entries(sources.sessions_db, since_ms, until_ms))
-    entries.extend(_agent_chat_entries(sources.agent_chat_db, since_ms, until_ms))
-    entries.extend(_mission_entries(sources.missions_db, since_ms, until_ms))
+    agent_chat_entries = list(_agent_chat_entries(sources.agent_chat_db, since_ms, until_ms))
+    mission_entries = list(_mission_entries(sources.missions_db, since_ms, until_ms))
     entries.extend(_speech_entries(sources.sessions_db, since_ms, until_ms))
+    cli_entries = list(_cli_entries(sources.cli_index_dir, since_ms, until_ms, bucket_ms))
+
+    # Subscription CLI transcripts are the authoritative usage source. A
+    # canonical agent-chat turn already represents the same provider call and
+    # used to be counted a second time. Only suppress chat rows when the CLI
+    # index has accumulated at least as many tokens for that vendor session;
+    # this keeps partial background indexing from making the report dip below
+    # the known chat total while a catch-up is still running.
+    chat_totals: dict[tuple[str, str], int] = {}
+    cli_totals: dict[tuple[str, str], int] = {}
+    for entry in agent_chat_entries:
+        if entry.runner in SUBSCRIPTION_RUNNERS and entry.ref_id:
+            key = (entry.runner, entry.ref_id)
+            chat_totals[key] = chat_totals.get(key, 0) + entry.tokens_total
+    for entry in cli_entries:
+        if entry.runner in SUBSCRIPTION_RUNNERS and entry.ref_id:
+            key = (entry.runner, entry.ref_id)
+            cli_totals[key] = cli_totals.get(key, 0) + entry.tokens_total
+    indexed_keys = {
+        key for key, total in chat_totals.items() if total > 0 and cli_totals.get(key, 0) >= total
+    }
     entries.extend(
-        _cli_entries(sources.cli_index_dir, since_ms, until_ms, bucket_ms)
+        entry
+        for entry in agent_chat_entries
+        if not (
+            entry.runner in SUBSCRIPTION_RUNNERS
+            and entry.ref_id
+            and (entry.runner, entry.ref_id) in indexed_keys
+        )
     )
+
+    mission_totals: dict[tuple[str, str], tuple[int, float]] = {}
+    for entry in mission_entries:
+        if entry.runner in SUBSCRIPTION_RUNNERS and entry.ref_id:
+            key = (entry.runner, entry.ref_id)
+            tokens, cost = mission_totals.get(key, (0, 0.0))
+            mission_totals[key] = (tokens + entry.tokens_total, cost + entry.cost_usd)
+    mission_indexed_keys: set[tuple[str, str]] = set()
+    for key, (tokens, cost) in mission_totals.items():
+        cli_tokens = cli_totals.get(key, 0)
+        cli_cost = sum(
+            entry.cost_usd
+            for entry in cli_entries
+            if (entry.runner, entry.ref_id) == key
+        )
+        covered = (
+            tokens > 0 and cli_tokens >= tokens
+        ) or (
+            tokens <= 0 and cost > 0 and cli_cost > 0 and cli_cost >= cost * 0.99
+        )
+        if covered:
+            mission_indexed_keys.add(key)
+    entries.extend(
+        entry
+        for entry in mission_entries
+        if not (
+            entry.runner in SUBSCRIPTION_RUNNERS
+            and entry.ref_id
+            and (entry.runner, entry.ref_id) in mission_indexed_keys
+        )
+    )
+    entries.extend(cli_entries)
     entries.extend(_ledger_entries(sources.ledger_db, since_ms, until_ms))
     entries.sort(key=lambda e: e.ts_ms)
     return entries

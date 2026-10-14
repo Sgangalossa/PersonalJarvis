@@ -276,6 +276,10 @@ ROUTER_TOOLS = frozenset({
     # safe-gated action — never a spawn, so it never enters a worker tool-set
     # (AP-5/AP-14). See ADR-0011 amendment "Inline web search".
     "search-web",
+    # Durable time-based reminders use the existing Tasks scheduler. The tool is
+    # monitor-tier, never a worker vehicle, and fails closed when the scheduler is
+    # not wired yet. See docs/product/everyday-use/tasks-and-reminders.md.
+    "schedule-task",
 })
 
 # Phase 7.3 — self-mod tools are registered directly in the router loader in

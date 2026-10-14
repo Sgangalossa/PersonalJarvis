@@ -64,6 +64,13 @@ CREATE TABLE IF NOT EXISTS agent_chat_permission_overrides (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_chat_sessions_updated
     ON agent_chat_sessions(updated_ms DESC);
+CREATE TABLE IF NOT EXISTS jarvis_chat_selection (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    provider    TEXT NOT NULL,
+    model       TEXT NOT NULL DEFAULT '',
+    effort      TEXT NOT NULL DEFAULT '',
+    account_id  TEXT NOT NULL DEFAULT ''
+);
 """
 
 _TITLE_MAX_CHARS = 80
@@ -87,6 +94,19 @@ _PREVIEW_MAX_CHARS = 120
 #: brain runner with the agent's own hands, listed only inside the society.
 SURFACES: Final[tuple[str, ...]] = ("jarvis", "agent", "local-models", "society")
 DEFAULT_SURFACE: Final[str] = "agent"
+
+
+@dataclass(frozen=True, slots=True)
+class ChatSelection:
+    """The last explicit Jarvis chat pick, independent of viewed history or voice."""
+
+    provider: str
+    model: str = ""
+    effort: str = ""
+    account_id: str = ""
+
+    def to_dict(self) -> dict[str, str]:
+        return asdict(self)
 
 
 @dataclass(slots=True)
@@ -162,6 +182,44 @@ class AgentChatStore:
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+
+    def chat_selection(self) -> ChatSelection | None:
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM jarvis_chat_selection WHERE id = 1").fetchone()
+            if row is None:
+                # Upgrade installs whose last choice exists only in chat history.
+                # Agent replies and automatic control turns must not win recency.
+                history = self._conn.execute(
+                    "SELECT s.provider, s.model, s.effort, s.account_id, e.payload "
+                    "FROM agent_chat_sessions s JOIN agent_chat_events e USING (session_id) "
+                    "WHERE s.surface = 'jarvis' AND e.kind = 'user_message' "
+                    "ORDER BY e.ts_ms DESC, e.seq DESC"
+                )
+                for previous in history:
+                    if (
+                        previous["provider"]
+                        and json.loads(previous["payload"]).get("origin") != "control"
+                    ):
+                        row = previous
+                        break
+        if row is None:
+            return None
+        return ChatSelection(
+            **{key: row[key] for key in ("provider", "model", "effort", "account_id")}
+        )
+
+    def save_chat_selection(self, selection: ChatSelection) -> None:
+        if not selection.provider.strip():
+            raise ValueError("A chat selection needs a provider")
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO jarvis_chat_selection (id, provider, model, effort, account_id) "
+                "VALUES (1, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+                "provider=excluded.provider, model=excluded.model, "
+                "effort=excluded.effort, account_id=excluded.account_id",
+                (selection.provider, selection.model, selection.effort, selection.account_id),
+            )
+            self._conn.commit()
 
     # ------------------------------------------------------------ sessions
 
@@ -377,6 +435,108 @@ class AgentChatStore:
         out["seq"] = seq
         out["ts_ms"] = ts_ms
         return out
+
+    def append_notice_once(self, session_id: str, payload: dict[str, Any], *, dedupe_key: str) -> dict[str, Any] | None:
+        """Persist a notice only if no prior notice carries ``dedupe_key``.
+
+        The check and insert share one SQLite IMMEDIATE transaction, so two
+        runtime processes racing after restart cannot both publish the same
+        durable projection.
+        """
+        if not dedupe_key.strip():
+            raise ValueError("dedupe_key must be non-empty")
+        ts_ms = now_ms()
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                rows = self._conn.execute(
+                    "SELECT payload FROM agent_chat_events WHERE session_id = ? AND kind = 'notice'",
+                    (session_id,),
+                ).fetchall()
+                if any(json.loads(row["payload"]).get("_dedupe_key") == dedupe_key for row in rows):
+                    self._conn.rollback()
+                    return None
+                row = self._conn.execute(
+                    "SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM agent_chat_events WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+                seq = int(row["next"]) if row else 1
+                stored = dict(payload)
+                stored["_dedupe_key"] = dedupe_key
+                self._conn.execute(
+                    "INSERT INTO agent_chat_events (session_id, seq, ts_ms, kind, payload) VALUES (?, ?, ?, ?, ?)",
+                    (session_id, seq, ts_ms, "notice", json.dumps(stored, ensure_ascii=False)),
+                )
+                self._conn.execute("UPDATE agent_chat_sessions SET updated_ms = ? WHERE session_id = ?", (ts_ms, session_id))
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return {
+            "kind": "notice",
+            "payload": stored,
+            "seq": seq,
+            "ts_ms": ts_ms,
+        }
+
+    def append_agent_message_once(
+        self, session_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Append one trusted agent message atomically by its message id.
+
+        Delivery retries can race across runtime processes. The receipt fold
+        is deliberately idempotent, but the append itself must also be atomic
+        or two concurrent receivers can create two turns from one envelope.
+        """
+        message_id = str(payload.get("message_id") or "").strip()
+        if not message_id:
+            raise ValueError("agent message requires message_id")
+        ts_ms = int(payload.get("ts_ms") or now_ms())
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._conn.execute(
+                    "SELECT seq, ts_ms, kind, payload FROM agent_chat_events "
+                    "WHERE session_id = ? AND kind = 'agent_message' "
+                    "AND json_extract(payload, '$.message_id') = ? "
+                    "ORDER BY seq LIMIT 1",
+                    (session_id, message_id),
+                ).fetchone()
+                if row is not None:
+                    self._conn.rollback()
+                    return None
+                next_row = self._conn.execute(
+                    "SELECT COALESCE(MAX(seq), 0) + 1 AS next "
+                    "FROM agent_chat_events WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+                seq = int(next_row["next"]) if next_row else 1
+                stored = dict(payload)
+                stored.pop("ts_ms", None)
+                self._conn.execute(
+                    "INSERT INTO agent_chat_events "
+                    "(session_id, seq, ts_ms, kind, payload) VALUES (?, ?, ?, ?, ?)",
+                    (session_id, seq, ts_ms, "agent_message",
+                     json.dumps(stored, ensure_ascii=False)),
+                )
+                text = str(stored.get("text") or "")
+                self._conn.execute(
+                    "UPDATE agent_chat_sessions SET message_count = message_count + 1, "
+                    "updated_ms = ?, preview = ?, "
+                    "title = CASE WHEN title = '' THEN ? ELSE title END "
+                    "WHERE session_id = ?",
+                    (ts_ms, text[:_PREVIEW_MAX_CHARS], _title_from(text), session_id),
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return {
+            "kind": "agent_message",
+            "payload": stored,
+            "seq": seq,
+            "ts_ms": ts_ms,
+        }
 
     def incoming_message(self, session_id: str, message_id: str) -> dict[str, Any] | None:
         """Fold a receipt and its status updates; old user messages stay untouched."""

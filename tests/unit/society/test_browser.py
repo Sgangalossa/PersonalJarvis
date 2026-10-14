@@ -86,6 +86,11 @@ def test_llm_mapping_with_explicit_keys():
 def test_task_needs_approval_words():
     assert task_needs_approval("Send the invoice to Bob")
     assert task_needs_approval("Bitte den Newsletter kündigen")  # i18n-allow: sample task
+    assert task_needs_approval("Invia il modulo al cliente")  # i18n-allow: sample task
+    assert task_needs_approval("Compra il biglietto e paga")  # i18n-allow: sample task
+    assert task_needs_approval("Elimina il mio account")  # i18n-allow: sample task
+    assert task_needs_approval("Prenota il tavolo")  # i18n-allow: sample task
+    assert not task_needs_approval("Leggi la posta e riassumila")  # i18n-allow: safe sample task
     assert not task_needs_approval("Read today's headlines and summarize them")
 
 

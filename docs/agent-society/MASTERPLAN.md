@@ -20,9 +20,8 @@ figure gate); open: the card's chat column. Figures: four bases + fifteen parts 
 pack, a generated catalog, the island's walkers wear them (character-pipeline.md §13). **Also done
 (2026-09-02):** an ASSIGN runs by default as a turn in the agent's canonical chat (per-agent
 model, tools and briefing apply in full; the turn's end is a RESULT on the board; the mission
-stack stays available via `payload.runner = "mission"`), the starter team Scout + Archivist is
-seeded once per install, seed proposals come from connected capabilities
-(`GET /api/society/seeds`), and the voice front door exists: router tools `delegate-to-agent`
+stack stays available via `payload.runner = "mission"`), the production roster starts with Jarvis only; teammate proposals come from connected capabilities
+(`GET /api/society/seeds`; the fixed Scout + Archivist helper remains explicit opt-in), and the voice front door exists: router tools `delegate-to-agent`
 and `society-status` (ADR-0011 amendment). **Agent mechanics wave (2026-09-02):** every agent
 has its own contained shell and file hands, its own persistent browser through browser-use
 (out of process, login sessions for the user's accounts, attach mode), and learns
@@ -34,8 +33,13 @@ session gets a names directive and the turn planner a `SOCIETY` reason, `delegat
 picks the fitting agent when no name is given, and a lead-assigned result comes back as a
 notice in its originating chat and, for voice requests, a batched update at a conversational
 pause (`agent-definition.md` §3.5). **M3
-world** is the maintainer's parallel track. Open in M4: rooms live under the scheduler, the
-curator.
+world** is the maintainer's parallel track. **M4 exit is now guarded end to end
+(2026-10-03):** bounded live rooms run through the single scheduler with crash recovery, the
+curator stages tainted knowledge behind the existing wiki review gate, group delegation has
+voice acknowledgement/status and completion announcements, room cost is durable/visible, and
+ROOM_OPEN/ROOM_SETTLE project into the world. The blocking CI contract runs the German voice
+exit test plus curator review/denial invariants.
+ **M5 hardening evidence (qualified 2026-10-05):** the legacy Agents deep link is pinned to the Society surface and Ledger, production remains Jarvis-only with capability-driven teammate proposals, Society spend is pinned to the canonical cost surface, the German Society locale is key/placeholder-parity guarded, AP-4 Society enum parity is blocking, the boot budget remains blocking, and the Ledger has an explicit accessible table contract. Pull-request CI run `37267330253` completed successfully on `388cb24fe19dc73e6db2dc82d8fe53b3b0e3df6b`, so these guards now have post-change runner evidence.
 
 The research behind every claim here lives in [`research/`](research/):
 [Branch A — product & UI](research/branch-a-product-ui.md) (Hermes Agent, Grok Bot, 3D stack,
@@ -354,13 +358,15 @@ add the four controls it lacked: authenticated writes (chokepoint), bounded non-
   open-island decision makes this the largest milestone — split into M3a (terrain, navigation,
   walkers) and M3b (buildings, polish) if it crowds the month. *Exit: watching a real mission
   play out on the island, on integrated graphics, with WebGL forced off falling back cleanly.*
-- **M4 — Society dynamics (T2/T3 for voice).** Bounded group rooms (meeting table), curator +
+- **M4 — Society dynamics (T2/T3 for voice) — exit guarded.** Bounded group rooms (meeting table), curator +
   taint + wiki review gate, `delegate-to-agent` router tool + ADR amendment + voice status/ack
   paths, notifications. *Exit: the spoken request "Jarvis, lass Scout und Archivist das zusammen klären" (i18n-allow: quoted German voice example)
   works end to end, costs a visible bounded amount, and the meeting shows in the world.*
+  The exit flow and curator review invariants run in the blocking Python contract lane.
 - **M5 — Hardening & migration.** Old JarvisAgentsView/AgentsView slots replaced (deep links
-  redirected, history visible in Ledger), first-run seed (a starter coordinator + one specialist),
-  cost-ledger unification, German gate, boot budget, accessibility pass, full guard suite.
+  redirected, history visible in Ledger), Jarvis-only production default with capability-driven
+  seed proposals (the fixed Scout/Archivist helper remains explicit opt-in), cost-ledger
+  unification, German gate, boot budget, accessibility pass, full guard suite.
 - **M6 — Stretch.** Skill-learning approval flow UI, event triggers ("when a PR merges"),
   per-agent screens ("Bildschirm von X") via `agent_screen` leases, marketplace skin catalog
   (licensing terms first), Gigi as a true 3D lead figure.

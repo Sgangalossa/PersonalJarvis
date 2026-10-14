@@ -30,7 +30,8 @@ execution.
 Engine selection (portable by design, per AGENTS.md section 3)
 -------------------------------------------------------------
 1. A local `/bin/bash` that IS 3.2 - the real thing, on a Mac. No Docker.
-2. Docker image `bash:3.2` - on Linux/Windows dev boxes and CI.
+2. Docker image `public.ecr.aws/docker/library/bash:3.2`, with Docker Hub as
+   a local fallback - on Linux/Windows dev boxes and CI.
 3. Neither available: report and skip, so a contributor without Docker is not
    blocked. CI passes `--require` to turn that skip into a hard failure.
 
@@ -48,7 +49,10 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-BASH32_IMAGE = "bash:3.2"
+BASH32_IMAGES = (
+    "public.ecr.aws/docker/library/bash:3.2",
+    "bash:3.2",
+)
 
 
 def _run(cmd: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
@@ -100,9 +104,16 @@ def parse_with_docker(scripts: list[str]) -> dict[str, str]:
         for rel in scripts
     )
     mount = f"{REPO_ROOT.as_posix()}:/w:ro"
-    got = _run(["docker", "run", "--rm", "-v", mount, BASH32_IMAGE, "sh", "-c", script])
-    if got.returncode != 0 and not got.stdout:
-        print(f"ERROR: bash 3.2 container failed to start: {got.stderr.strip()}", file=sys.stderr)
+    startup_errors: list[str] = []
+    for image in BASH32_IMAGES:
+        got = _run(["docker", "run", "--rm", "-v", mount, image, "sh", "-c", script])
+        if got.returncode == 0 or got.stdout:
+            print(f"Engine: docker {image}")
+            break
+        startup_errors.append(f"{image}: {got.stderr.strip()}")
+    else:
+        detail = "\n".join(startup_errors)
+        print(f"ERROR: bash 3.2 containers failed to start:\n{detail}", file=sys.stderr)
         raise SystemExit(2)
 
     failures: dict[str, str] = {}
@@ -135,12 +146,11 @@ def main() -> int:
         print(f"Engine: local {bash} (bash 3.2 - native macOS)")
         failures = parse_with_local(bash, scripts)
     elif docker_available():
-        print(f"Engine: docker {BASH32_IMAGE}")
         failures = parse_with_docker(scripts)
     else:
         message = (
             "No bash 3.2 available (need a Mac's /bin/bash or Docker for "
-            f"{BASH32_IMAGE}). macOS parse-compatibility was NOT verified."
+            f"{', '.join(BASH32_IMAGES)}). macOS parse-compatibility was NOT verified."
         )
         if args.require:
             print(f"FAIL: {message}", file=sys.stderr)

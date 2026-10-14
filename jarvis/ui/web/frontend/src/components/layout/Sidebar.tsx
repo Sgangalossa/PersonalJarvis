@@ -290,9 +290,7 @@ export function Sidebar({
   const pluginWarnTitle = pluginAttention.names.length
     ? `${t("sidebar.plugins_reconnect_alert")}: ${pluginAttention.names.join(", ")}`
     : t("sidebar.plugins_reconnect_alert");
-  const agentsCount = useEventStore((s) =>
-    s.events.filter((e) => e.name === "AgentStateChange").length > 0 ? undefined : 0,
-  );
+  const agentsCount = useEventStore((s) => s.societyAttentionCount);
 
   // Read for the status line's connecting phase. Same resolver as the
   // mission-deck header and orb (`useVoiceMode`): a negotiating realtime
@@ -615,6 +613,8 @@ function NavRow({
   const prefetch = useSectionPrefetch(item.id);
   const Icon = item.icon;
   const hint = alert ? alertTitle : warn ? warnTitle : undefined;
+  const compactLabel =
+    badge !== undefined && badge > 0 ? `${label} (${badge})` : label;
   /*
    * Selection is drawn on the WHOLE ROW.
    *
@@ -644,8 +644,9 @@ function NavRow({
           {...prefetch}
           data-tour={`nav-${item.id}`}
           onClick={onClick}
-          title={compact ? `${label}${hint ? ` — ${hint}` : ""}` : hint}
-          aria-label={compact ? label : undefined}
+          title={compact ? compactLabel : hint}
+          aria-current={active ? "page" : undefined}
+          aria-label={compact ? compactLabel : undefined}
           className={clsx(
             "group relative flex h-9 w-full items-center gap-2.5 rounded-md px-3 text-base font-medium transition-colors",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",

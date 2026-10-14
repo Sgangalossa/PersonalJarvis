@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
+import logging
 from functools import lru_cache
 from pathlib import Path
 
-from jarvis.marketplace.catalog import PluginCatalog
+from jarvis.marketplace.catalog import PatPasteAuth, PluginCatalog
+
+log = logging.getLogger(__name__)
 
 # User-editable runtime override (lives under the gitignored data/). Wins when
 # present so a user / the Marketplace UI can curate connectors locally.
@@ -136,49 +138,78 @@ def _migrate_obsolete_oauth_discovery(raw: object) -> object:
 # taxonomy or logo change would land only on fresh installs.
 _OVERRIDE_OWNED_FIELDS: tuple[str, ...] = ("auth", "mcp_server")
 
-# Fingerprints of the complete PAT auth blocks shipped before browser login.
-# Exact matching (including help text and endpoints) deliberately refuses to
-# reinterpret custom credentials or self-hosted configurations as package data.
-_LEGACY_PAT_AUTH_DIGESTS = {
-    "home_assistant": "9167ac7a5c4d39b87e2a863cb2c71e2e4b4541b24b83626bbe86d393fa99d4b2",
-    "github": "f7111c4bba8d16205ac3b2ff41f255b0cee0f3a3c86e4138e9b56b60054465fc",
-    "vercel": "f7588c19421659a8cd22765c3015e76c96b59194b68c26b24a8346590f9bfe04",
-    "supabase": "6ef753e23618090c7ff4e388d86a1fe91e5a4c78ce5a522963a248c3d4ee19d6",
-    "stripe": "e19610b1b59a59ffe1e231e8d5adda082437eebb59cec1c2df215470c742dde4",
-}
+# Exact structural deltas for package-auth migrations. These are schema
+# documents, not credentials: compare their fields directly so the migration
+# cannot turn an auth configuration into a password-like digest.
+_GITHUB_LEGACY_INSTRUCTION = (
+    "1. The link below opens GitHub with the right scopes "
+    "(repo, workflow, read:user) already ticked.\n"
+    "2. Pick an expiration (90 days is a sensible default), then click 'Generate token'.\n"
+    "3. Copy the token (shown only once) and paste it below.\n"
+    "4. If your repos sit behind SAML SSO, click 'Configure SSO' "
+    "next to the new token after creation."
+)
+_SLACK_ADDED_SCOPES = frozenset(
+    {
+        "channels:read",
+        "groups:read",
+        "im:read",
+        "mpim:read",
+        "canvases:read",
+        "canvases:write",
+    }
+)
 
-# Full shipped Slack auth block before channel listing and Canvas permissions.
-# Never widen a user's custom scopes, client, redirect, or server configuration.
-_LEGACY_SLACK_AUTH_DIGEST = "7222ece276d51c75bcdf6f8f0dc28412674950ef21301975b7870a73340c1de2"
+
+def _legacy_fallback_auth(seed_plugin: dict) -> dict[str, object] | None:
+    """Reconstruct the exact pre-browser auth block from the package seed."""
+    fallback = seed_plugin.get("fallback_auth")
+    if not isinstance(fallback, dict):
+        return None
+    expected = dict(fallback)
+    if seed_plugin.get("id") == "github":
+        expected.pop("token_prefixes", None)
+        expected["instruction_md"] = _GITHUB_LEGACY_INSTRUCTION
+    return expected
 
 
 def _has_obsolete_slack_scopes(plugin: dict, seed_plugin: dict) -> bool:
     auth = plugin.get("auth")
-    if plugin.get("id") != "slack" or not isinstance(auth, dict):
+    seed_auth = seed_plugin.get("auth")
+    if (
+        plugin.get("id") != "slack"
+        or not isinstance(auth, dict)
+        or not isinstance(seed_auth, dict)
+        or not isinstance(seed_auth.get("scopes"), list)
+    ):
         return False
-    digest = hashlib.sha256(
-        json.dumps(auth, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
-    return digest == _LEGACY_SLACK_AUTH_DIGEST and plugin.get("mcp_server") == seed_plugin.get(
-        "mcp_server"
-    )
+    expected = dict(seed_auth)
+    expected["scopes"] = [
+        scope for scope in seed_auth["scopes"] if scope not in _SLACK_ADDED_SCOPES
+    ]
+    return auth == expected and plugin.get("mcp_server") == seed_plugin.get("mcp_server")
 
 
 def _has_obsolete_builtin_auth(plugin: dict, seed_plugin: dict) -> bool:
     auth = plugin.get("auth")
     if not isinstance(auth, dict) or auth.get("mode") != "pat_paste":
         return False
-    plugin_id = str(plugin.get("id", ""))
-    expected = _LEGACY_PAT_AUTH_DIGESTS.get(plugin_id)
+    expected = _legacy_fallback_auth(seed_plugin)
     if expected is None:
         return False
-    digest = hashlib.sha256(
-        json.dumps(auth, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
-    if digest != expected:
+    try:
+        # Historical JSON omitted fields that later gained schema defaults
+        # (for example auth_scheme and token_prefixes). Compare the validated
+        # structures so representational differences migrate, while any real
+        # user customization still makes the models unequal.
+        if PatPasteAuth.model_validate(auth) != PatPasteAuth.model_validate(expected):
+            return False
+    except ValueError:
+        log.warning("Invalid marketplace PAT auth schema; preserving the user override.")
         return False
     # A user may have retained the original auth while choosing another MCP
     # server. Do not replace that pairing. Vercel previously had no MCP server.
+    plugin_id = str(plugin.get("id", ""))
     previous_mcp = None if plugin_id == "vercel" else seed_plugin.get("mcp_server")
     return plugin.get("mcp_server") == previous_mcp
 
