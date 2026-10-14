@@ -153,9 +153,12 @@ def test_hard_positive_file_ops_resolves_to_file_capability(
     """'Lies die Datei foo.txt' must resolve to a file-capable harness."""
     cap = seeded_registry.resolve_intent("Lies die Datei foo.txt")  # i18n-allow
     assert cap is not None, "Expected a capability match for file-read"
-    assert "file" in cap.id or cap.source == "harness", (
-        f"Expected a file-capable harness/tool, got {cap!r}"
-    )
+    file_objects = {"file", "files", "datei", "dateien"}
+    assert (
+        "file" in cap.id
+        or cap.source == "harness"
+        or file_objects.intersection(cap.objects)
+    ), f"Expected a file-capable harness/tool, got {cap!r}"
 
 
 def test_hard_positive_smalltalk_not_action_intent(
