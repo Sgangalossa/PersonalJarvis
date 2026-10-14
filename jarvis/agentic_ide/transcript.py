@@ -34,7 +34,6 @@ from .screen import ScreenBuffer
 # Kept for callers that want plain text out of a coloured string (the prompt
 # sanitizer uses it). Screen replay does NOT go through this.
 _CSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-_OSC_RE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 _ESC_RE = re.compile(r"\x1b[@-Z\\-_]")
 _MISC_RE = re.compile(r"\x1b[<>=]")
 
@@ -71,9 +70,42 @@ _DECORATION_CHARS = set("─│┌┐└┘├┤┬┴┼━┃╭╮╯╰═�
 _SPINNER_CHARS = set("|/\\-◐◓◑◒✻✽✢·✳✶⣿")
 
 
+def _strip_osc(text: str) -> str:
+    """Remove complete OSC records in one forward scan, without backtracking.
+
+    An ESC other than ST interrupts an OSC record. Keep that malformed
+    prefix unchanged and retry only at the interrupting ESC, never at an
+    earlier character. This preserves the former substitution semantics.
+    """
+    pieces: list[str] = []
+    kept_from = 0
+    search_from = 0
+    size = len(text)
+    while True:
+        start = text.find("\x1b]", search_from)
+        if start < 0:
+            break
+        end = start + 2
+        while end < size and text[end] not in "\x07\x1b":
+            end += 1
+        if end == size:
+            break
+        if text[end] == "\x07":
+            stop = end + 1
+        elif text.startswith("\\", end + 1):
+            stop = end + 2
+        else:
+            search_from = end
+            continue
+        pieces.append(text[kept_from:start])
+        kept_from = stop
+        search_from = stop
+    pieces.append(text[kept_from:])
+    return "".join(pieces)
+
 def strip_ansi(text: str) -> str:
     """Remove terminal escape sequences, leaving printable text."""
-    text = _OSC_RE.sub("", text)
+    text = _strip_osc(text)
     text = _CSI_RE.sub("", text)
     text = _MISC_RE.sub("", text)
     text = _ESC_RE.sub("", text)
