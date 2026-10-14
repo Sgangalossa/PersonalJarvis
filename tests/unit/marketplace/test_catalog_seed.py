@@ -500,3 +500,25 @@ def test_youtube_music_joins_the_google_client_family_as_native_tool() -> None:
     assert spec.longevity == "provider_limited"
     ports = [p.auth.callback_port for p in _seed().plugins if getattr(p.auth, "callback_port", 0)]
     assert ports.count(spec.auth.callback_port) == 1
+
+def test_invalid_legacy_auth_preserves_override_without_logging_private_fields(caplog) -> None:
+    seed_plugin = {
+        "id": "home_assistant",
+        "auth": {"mode": "instance_browser"},
+        "fallback_auth": {
+            "mode": "pat_paste",
+            "token_creation_url": "https://example.test/token",
+            "token_prefix": "",
+            "validation_endpoint": "/api/",
+            "instruction_md": "Create a token",
+        },
+    }
+    invalid = dict(seed_plugin["fallback_auth"], private_field="never-log-this-value")
+    plugin = {"id": "home_assistant", "auth": invalid}
+
+    result = catalog_data._merge_with_seed({"plugins": [plugin]}, {"plugins": [seed_plugin]})
+
+    assert result["plugins"][0]["auth"] == invalid
+    assert "preserving the user override" in caplog.text
+    assert "private_field" not in caplog.text
+    assert "never-log-this-value" not in caplog.text
