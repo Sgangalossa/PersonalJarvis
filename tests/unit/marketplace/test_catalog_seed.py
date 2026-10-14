@@ -302,7 +302,9 @@ def test_developer_browser_oauth_uses_official_hosted_mcp(plugin_id) -> None:
     assert spec.mcp_server["url"] == spec.auth.mcp_url
 
 
-@pytest.mark.parametrize("plugin_id", ["github", "vercel", "supabase", "stripe"])
+@pytest.mark.parametrize(
+    "plugin_id", ["github", "vercel", "supabase", "stripe", "home_assistant"]
+)
 @pytest.mark.parametrize("custom", [None, "auth", "mcp"])
 def test_legacy_pat_override_migrates_only_unchanged_builtin(
     monkeypatch, tmp_path, plugin_id, custom
@@ -339,9 +341,11 @@ def test_legacy_pat_override_migrates_only_unchanged_builtin(
         else:
             assert result.mcp_server["url"] == "https://custom.example.test/mcp"
     else:
-        assert result.auth.mode == (
-            "oauth_device_flow" if plugin_id == "github" else "hosted_mcp_oauth_dcr"
-        )
+        expected_mode = {
+            "github": "oauth_device_flow",
+            "home_assistant": "instance_browser",
+        }.get(plugin_id, "hosted_mcp_oauth_dcr")
+        assert result.auth.mode == expected_mode
     assert override.read_text(encoding="utf-8") == content
     clear_cache()
 
