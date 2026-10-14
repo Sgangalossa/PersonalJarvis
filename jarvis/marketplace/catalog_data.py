@@ -6,7 +6,7 @@ import json
 from functools import lru_cache
 from pathlib import Path
 
-from jarvis.marketplace.catalog import PluginCatalog
+from jarvis.marketplace.catalog import PatPasteAuth, PluginCatalog
 
 # User-editable runtime override (lives under the gitignored data/). Wins when
 # present so a user / the Marketplace UI can curate connectors locally.
@@ -192,13 +192,23 @@ def _has_obsolete_builtin_auth(plugin: dict, seed_plugin: dict) -> bool:
     if not isinstance(auth, dict) or auth.get("mode") != "pat_paste":
         return False
     expected = _legacy_fallback_auth(seed_plugin)
-    if expected is None or auth != expected:
+    if expected is None:
+        return False
+    try:
+        # Historical JSON omitted fields that later gained schema defaults
+        # (for example auth_scheme and token_prefixes). Compare the validated
+        # structures so representational differences migrate, while any real
+        # user customization still makes the models unequal.
+        if PatPasteAuth.model_validate(auth) != PatPasteAuth.model_validate(expected):
+            return False
+    except ValueError:
         return False
     # A user may have retained the original auth while choosing another MCP
     # server. Do not replace that pairing. Vercel previously had no MCP server.
     plugin_id = str(plugin.get("id", ""))
     previous_mcp = None if plugin_id == "vercel" else seed_plugin.get("mcp_server")
     return plugin.get("mcp_server") == previous_mcp
+
 
 def _merge_with_seed(override: object, seed: object) -> object:
     """Reconcile a user's `data/` catalog with the shipped package seed.
