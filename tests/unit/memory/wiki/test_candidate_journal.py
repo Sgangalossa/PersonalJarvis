@@ -87,8 +87,11 @@ def test_basis_and_salience_roundtrip_and_normalisation(
 
 def test_append_blocks_secret_shaped_candidate_defense_in_depth(
     journal: CandidateJournal,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     secret = "sk-proj-" + "B" * 30
+    caplog.set_level("WARNING", logger="jarvis.memory.wiki.journal")
+
     count = journal.append(
         [CandidateFact(fact=f"Credential: {secret}", subjects=("ruben",))],
         source_label="test",
@@ -97,6 +100,9 @@ def test_append_blocks_secret_shaped_candidate_defense_in_depth(
 
     assert count == 0
     assert journal.pending() == []
+    assert "CandidateJournal: blocked secret-shaped candidate data" in caplog.text
+    assert secret not in caplog.text
+    assert "1 candidate" not in caplog.text
 
 
 def test_candidate_evidence_survives_reopen(tmp_path: Path) -> None:
