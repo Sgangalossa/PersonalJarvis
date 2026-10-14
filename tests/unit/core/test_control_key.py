@@ -12,6 +12,7 @@ from __future__ import annotations
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -74,6 +75,19 @@ def test_mask_shows_only_last_four() -> None:
     assert "abcdef" not in masked
     assert ck.mask_control_key(None) == ""
     assert ck.mask_control_key("") == ""
+
+
+def test_boot_log_never_renders_control_key_derivatives() -> None:
+    launcher = (
+        Path(__file__).resolve().parents[3] / "jarvis" / "ui" / "web" / "launcher.py"
+    ).read_text(encoding="utf-8")
+    bootstrap = launcher.split("# Per-user Jarvis Control API key", 1)[1].split(
+        '_m_mark("control_key")',
+        1,
+    )[0]
+
+    assert "mask_control_key" not in bootstrap
+    assert 'info("Jarvis Control API key ready")' in bootstrap
 
 
 def test_get_returns_none_when_nothing_stored(isolated) -> None:
