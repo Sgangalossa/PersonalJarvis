@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from functools import lru_cache
 from pathlib import Path
 
 from jarvis.marketplace.catalog import PatPasteAuth, PluginCatalog
+
+log = logging.getLogger(__name__)
 
 # User-editable runtime override (lives under the gitignored data/). Wins when
 # present so a user / the Marketplace UI can curate connectors locally.
@@ -202,6 +205,7 @@ def _has_obsolete_builtin_auth(plugin: dict, seed_plugin: dict) -> bool:
         if PatPasteAuth.model_validate(auth) != PatPasteAuth.model_validate(expected):
             return False
     except ValueError:
+        log.warning("Invalid marketplace PAT auth schema; preserving the user override.")
         return False
     # A user may have retained the original auth while choosing another MCP
     # server. Do not replace that pairing. Vercel previously had no MCP server.
