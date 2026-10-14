@@ -13,10 +13,9 @@ Create one with::
 
     python -m jarvis.core.admin_password
 
-A bare 64-character SHA-256 hex digest (the pre-2026-09 format) is still
-accepted so an existing config keeps working, but it is deprecated: it has no
-salt and no work factor, so a leaked config makes the password cheap to
-brute-force. Re-hash with the command above.
+A bare 64-character SHA-256 hex digest (the pre-2026-09 format) is recognized
+but rejected. It has no salt or work factor, so accepting it would keep admin
+access vulnerable to cheap offline brute force. Re-hash with the command above.
 """
 
 from __future__ import annotations
@@ -74,16 +73,6 @@ def is_legacy_hash(stored: str) -> bool:
     return bool(_LEGACY_SHA256_RE.match(stored or ""))
 
 
-def _verify_legacy_sha256(provided: str, stored: str) -> bool:
-    # Deprecated format, kept only so existing configs do not lock their
-    # owner out. New hashes are always scrypt (see hash_admin_password).
-    log.warning(
-        "security.admin_password_hash uses the deprecated unsalted SHA-256 "
-        "format; re-hash it with `python -m jarvis.core.admin_password`."
-    )
-    computed = hashlib.sha256(provided.encode("utf-8")).hexdigest()
-    return hmac.compare_digest(computed, stored.lower())
-
 
 def verify_admin_password(provided: str | None, stored: str | None) -> bool:
     """Constant-time check of *provided* against the stored hash string.
@@ -94,7 +83,12 @@ def verify_admin_password(provided: str | None, stored: str | None) -> bool:
     if not stored or not provided:
         return False
     if is_legacy_hash(stored):
-        return _verify_legacy_sha256(provided, stored)
+        log.warning(
+            "security.admin_password_hash uses the retired unsalted SHA-256 "
+            "format; admin mode is locked until it is re-hashed with "
+            "`python -m jarvis.core.admin_password`."
+        )
+        return False
     parts = stored.split("$")
     if len(parts) != 6 or parts[0] != SCHEME:
         log.warning("security.admin_password_hash has an unrecognised format; admin mode locked.")
