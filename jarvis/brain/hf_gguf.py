@@ -58,9 +58,11 @@ _SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
 
 #: A quantization label inside a GGUF filename, e.g. ``Q4_K_M``, ``IQ2_XS``,
 #: ``Q8_0``, ``F16``, ``BF16``. Anchored on separators so ``iq2`` in an
-#: unrelated word does not match.
+#: unrelated word does not match. Possessive suffix quantifiers prevent a
+#: failed fullmatch from revisiting every completed suffix (Python 3.11+).
+#: Underscores delimit suffixes, so no valid match needs that backtracking.
 _QUANT_RE = re.compile(
-    r"(?<![A-Za-z0-9])((?:I?Q\d(?:_[A-Z0-9]+)*)|F16|F32|BF16)(?![A-Za-z0-9])",
+    r"(?<![A-Za-z0-9])((?:I?Q\d(?:_[A-Z0-9]++)*+)|F16|F32|BF16)(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
 
