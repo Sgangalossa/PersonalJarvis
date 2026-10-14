@@ -309,3 +309,15 @@ def test_not_found_sentence_names_hugging_face_for_hf_names() -> None:
     quant = pull.not_found_message("huggingface.co/unsloth/Qwen3.8-27B-GGUF:Q9_Z")
     assert "Q9_Z" in quant
     assert "quantization" in quant
+
+@pytest.mark.parametrize("suffix", ["?", "/../../file", "=invalid"])
+def test_pull_name_rejects_long_repeated_quantization_suffixes(suffix: str) -> None:
+    label = "Q0" + "_Q0" * 20_000
+    with pytest.raises(ValueError, match="quantization label"):
+        hf.pull_name("user", "repo", label + suffix)
+
+
+def test_long_quantization_label_keeps_its_complete_name() -> None:
+    label = "Q0" + "_Q0" * 20_000
+    assert hf.parse_quant("model-" + label + ".gguf") == label
+    assert hf.pull_name("user", "repo", label) == "hf.co/user/repo:" + label
